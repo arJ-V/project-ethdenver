@@ -2,11 +2,8 @@
   "name": "ai-copilot",
   "version": "0.1.0",
   "description": "LangChain NLP terminal.",
-  "main": "index.js",
   "scripts": {
-    "test": "echo "Error: no test specified" && exit 1"
+    "test": "echo \"No tests yet\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "private": true
 }

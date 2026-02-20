@@ -1,0 +1,16 @@
+{
+  "name": "project-ethdenver",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/contracts-adi",
+    "packages/contracts-hedera",
+    "packages/relayer-python",
+    "packages/ai-copilot",
+    "packages/ui-dashboard"
+  ],
+  "scripts": {
+    "test": "npm run test -w contracts-adi && npm run test -w contracts-hedera",
+    "build": "npm run compile -w contracts-adi && npm run compile -w contracts-hedera"
+  }
+}

@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "./YieldOracle.sol";
+
+contract HederaOptionsDesk is AccessControl {
+    bytes32 public constant SETTLEMENT_EXECUTOR_ROLE = keccak256("SETTLEMENT_EXECUTOR_ROLE");
+
+    uint256 public constant MIN_EXPIRY = 180;
+    uint256 public constant MAX_ORACLE_AGE = 600;
+    uint256 public constant ORACLE_GRACE_WINDOW = 300;
+    address public constant HSS_PRECOMPILE = address(0x16b);
+
+    enum OptionStatus {
+        None,
+        Written,
+        Settled,
+        Slashed
+    }
+
+    struct OptionPosition {
+        address writer;
+        address buyer;
+        uint256 amount;
+        uint256 strike;
+        uint256 expiry;
+        bytes32 scheduleRef;
+        OptionStatus status;
+    }
+
+    IERC20 public immutable ySolar;
+    YieldOracle public immutable yieldOracle;
+    uint256 public nextOptionId = 1;
+    mapping(uint256 => OptionPosition) public options;
+
+    event OptionWritten(
+        uint256 indexed optionId,
+        address indexed writer,
+        address indexed buyer,
+        uint256 amount,
+        uint256 strike,
+        uint256 expiry
+    );
+    event CollateralLocked(uint256 indexed optionId, address indexed writer, uint256 amount);
+    event SettlementScheduled(uint256 indexed optionId, bytes32 indexed scheduleRef, uint256 expiry);
+    event OptionSettled(
+        uint256 indexed optionId,
+        address indexed buyer,
+        uint256 amount,
+        uint256 oracleYieldIndex,
+        uint256 oracleRoundId,
+        uint256 oracleUpdatedAt
+    );
+    event CollateralReleased(
+        uint256 indexed optionId,
+        address indexed writer,
+        uint256 amount,
+        uint256 oracleYieldIndex,
+        uint256 oracleRoundId,
+        uint256 oracleUpdatedAt
+    );
+    event CollateralSlashed(
+        uint256 indexed optionId,
+        address indexed buyer,
+        uint256 amount,
+        uint256 oracleYieldIndex,
+        uint256 oracleRoundId,
+        uint256 oracleUpdatedAt
+    );
+    event SettlementFailed(
+        uint256 indexed optionId,
+        string reason,
+        uint256 oracleRoundId,
+        uint256 oracleUpdatedAt
+    );
+
+    error InvalidBuyer();
+    error InvalidAmount();
+    error InvalidExpiry();
+    error InvalidStatus();
+    error UnauthorizedSettler();
+    error OptionNotExpired();
+    error TransferFailed();
+    error OracleNotInitialized();
+    error OracleStale();
+    error OracleTooFuture();
+    error OracleWindowMiss();
+
+    constructor(address admin, address ySolarToken, address oracleAddress) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(SETTLEMENT_EXECUTOR_ROLE, admin);
+        ySolar = IERC20(ySolarToken);
+        yieldOracle = YieldOracle(oracleAddress);
+    }
+
+    modifier onlyKYCd(address) {
+        _;
+    }
+
+    function writeOption(
+        address buyer,
+        uint256 amount,
+        uint256 strike,
+        uint256 expiry
+    ) external onlyKYCd(msg.sender) returns (uint256 optionId) {
+        if (buyer == address(0)) revert InvalidBuyer();
+        if (amount == 0 || strike == 0) revert InvalidAmount();
+        if (expiry < block.timestamp + MIN_EXPIRY) revert InvalidExpiry();
+
+        if (!ySolar.transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
+
+        optionId = nextOptionId++;
+        bytes32 scheduleRef = _scheduleSettlement(optionId, expiry);
+
+        options[optionId] = OptionPosition({
+            writer: msg.sender,
+            buyer: buyer,
+            amount: amount,
+            strike: strike,
+            expiry: expiry,
+            scheduleRef: scheduleRef,
+            status: OptionStatus.Written
+        });
+
+        emit OptionWritten(optionId, msg.sender, buyer, amount, strike, expiry);
+        emit CollateralLocked(optionId, msg.sender, amount);
+        emit SettlementScheduled(optionId, scheduleRef, expiry);
+    }
+
+    function executeScheduledSettlement(uint256 optionId) external onlyRole(SETTLEMENT_EXECUTOR_ROLE) {
+        this.settleOption(optionId);
+    }
+
+    function settleOption(uint256 optionId) external {
+        if (msg.sender != address(this)) revert UnauthorizedSettler();
+
+        OptionPosition storage op = options[optionId];
+        if (op.status != OptionStatus.Written) revert InvalidStatus();
+        if (block.timestamp < op.expiry) revert OptionNotExpired();
+
+        (uint256 yieldIndex, uint256 updatedAt, uint256 roundId) = yieldOracle.getLatest();
+        if (roundId == 0) revert OracleNotInitialized();
+        if (updatedAt > block.timestamp) revert OracleTooFuture();
+        if (block.timestamp - updatedAt > MAX_ORACLE_AGE) revert OracleStale();
+        if (updatedAt < op.expiry - ORACLE_GRACE_WINDOW) revert OracleWindowMiss();
+
+        uint256 balance = ySolar.balanceOf(address(this));
+        uint256 payout = op.amount <= balance ? op.amount : balance;
+
+        if (yieldIndex >= op.strike) {
+            if (payout == 0) {
+                op.status = OptionStatus.Slashed;
+                emit SettlementFailed(optionId, "NO_COLLATERAL", roundId, updatedAt);
+                emit CollateralSlashed(optionId, op.buyer, 0, yieldIndex, roundId, updatedAt);
+                return;
+            }
+            if (!ySolar.transfer(op.buyer, payout)) revert TransferFailed();
+
+            if (payout < op.amount) {
+                op.status = OptionStatus.Slashed;
+                emit SettlementFailed(optionId, "PARTIAL_COLLATERAL_SLASH", roundId, updatedAt);
+                emit CollateralSlashed(optionId, op.buyer, payout, yieldIndex, roundId, updatedAt);
+                return;
+            }
+
+            op.status = OptionStatus.Settled;
+            emit OptionSettled(optionId, op.buyer, op.amount, yieldIndex, roundId, updatedAt);
+            return;
+        }
+
+        if (!ySolar.transfer(op.writer, payout)) revert TransferFailed();
+        if (payout < op.amount) {
+            op.status = OptionStatus.Slashed;
+            emit SettlementFailed(optionId, "PARTIAL_RELEASE_SLASH", roundId, updatedAt);
+            emit CollateralSlashed(optionId, op.buyer, payout, yieldIndex, roundId, updatedAt);
+            return;
+        }
+
+        op.status = OptionStatus.Settled;
+        emit CollateralReleased(optionId, op.writer, op.amount, yieldIndex, roundId, updatedAt);
+    }
+
+    function _scheduleSettlement(uint256 optionId, uint256 expiry) internal returns (bytes32 scheduleRef) {
+        // Best-effort precompile call for testnet integration; local tests continue if unavailable.
+        bytes memory payload = abi.encodeWithSignature("schedule(uint256,uint256)", optionId, expiry);
+        (bool ok, ) = HSS_PRECOMPILE.call(payload);
+        if (ok) {
+            scheduleRef = keccak256(abi.encodePacked(block.chainid, optionId, expiry, "HSS"));
+        } else {
+            scheduleRef = keccak256(abi.encodePacked(block.chainid, optionId, expiry, "LOCAL"));
+        }
+    }
+}

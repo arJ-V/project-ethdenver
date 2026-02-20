@@ -1,12 +1,9 @@
 {
   "name": "relayer",
   "version": "0.1.0",
-  "description": "Backend script listening to ADI and pushing the yield oracle data.",
-  "main": "index.js",
+  "description": "Legacy relayer placeholder; use relayer-python package.",
   "scripts": {
-    "test": "echo "Error: no test specified" && exit 1"
+    "test": "echo \"Use relayer-python\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "private": true
 }
