@@ -9,7 +9,9 @@ cache
 .env.*.local
 .pytest_cache
 __pycache__
+*.pyc
+.venv/
+venv/
 **/gasReporterOutput.json
 packages/relayer-python/.relayer_state.json
 docs/deployed-addresses.json
-node_modules

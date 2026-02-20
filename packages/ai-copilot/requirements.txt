@@ -1,0 +1,8 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+openai>=1.30.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+# Community Python 0G client (optional; fallback is plain OpenAI client):
+# pip install git+https://github.com/DormintLab/python-0g

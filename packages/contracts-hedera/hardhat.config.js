@@ -2,10 +2,10 @@ require("@nomicfoundation/hardhat-toolbox");
 const path = require("path");
 const fs = require("fs");
 
-// Load the shared hackathon env without adding new dependencies.
-const sharedEnvPath = path.join(__dirname, "..", "relayer-python", ".env");
-if (fs.existsSync(sharedEnvPath)) {
-  const lines = fs.readFileSync(sharedEnvPath, "utf8").split(/\r?\n/);
+// Load env from multiple locations (first wins): root .env, then relayer-python/.env
+function loadEnv(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
   for (const line of lines) {
     if (!line || line.trim().startsWith("#")) continue;
     const idx = line.indexOf("=");
@@ -15,9 +15,13 @@ if (fs.existsSync(sharedEnvPath)) {
     if (!process.env[key]) process.env[key] = val;
   }
 }
+const rootEnv = path.join(__dirname, "..", "..", ".env");
+const relayerEnv = path.join(__dirname, "..", "relayer-python", ".env");
+loadEnv(rootEnv);
+loadEnv(relayerEnv);
 
 const hederaRpcUrl = process.env.HEDERA_RPC_URL || "https://testnet.hashio.io/api";
-const hederaPk = process.env.HEDERA_OPERATOR_KEY || "";
+const hederaPk = process.env.HEDERA_OPERATOR_KEY || process.env.WRITER_PRIVATE_KEY || "";
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
