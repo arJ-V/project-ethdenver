@@ -1,0 +1,25 @@
+[
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "siteId", "type": "uint256" },
+      { "internalType": "uint256", "name": "timestamp", "type": "uint256" },
+      { "internalType": "uint256", "name": "wattHours", "type": "uint256" },
+      { "internalType": "uint256", "name": "batterySocBps", "type": "uint256" }
+    ],
+    "name": "publish",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "uint256", "name": "siteId", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "wattHours", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "batterySocBps", "type": "uint256" }
+    ],
+    "name": "Telemetry",
+    "type": "event"
+  }
+]
