@@ -1,2 +1,0 @@
-# ui-dashboard
-Streamlit frontend.

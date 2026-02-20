@@ -1,9 +1,0 @@
-{
-  "name": "relayer",
-  "version": "0.1.0",
-  "description": "Legacy relayer placeholder; use relayer-python package.",
-  "scripts": {
-    "test": "echo \"Use relayer-python\""
-  },
-  "private": true
-}

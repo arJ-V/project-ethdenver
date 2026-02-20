@@ -1,9 +1,0 @@
-{
-  "name": "ui-dashboard",
-  "version": "0.1.0",
-  "description": "Streamlit frontend.",
-  "scripts": {
-    "test": "echo \"No tests yet\""
-  },
-  "private": true
-}
