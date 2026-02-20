@@ -1,0 +1,12 @@
+{
+  "name": "contracts-hedera",
+  "version": "0.1.0",
+  "description": "Hedera-side contracts and HSS scheduling (Layer 3).",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo "Error: no test specified" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "relayer",
+  "version": "0.1.0",
+  "description": "Backend script listening to ADI and pushing the yield oracle data.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo "Error: no test specified" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
