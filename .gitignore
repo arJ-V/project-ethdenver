@@ -12,3 +12,4 @@ __pycache__
 **/gasReporterOutput.json
 packages/relayer-python/.relayer_state.json
 docs/deployed-addresses.json
+node_modules
