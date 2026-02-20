@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: solartick
+    volumes:
+      - solartick_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/solartick
+      QN_STREAMS_WEBHOOK_SECRET: ${QN_STREAMS_WEBHOOK_SECRET:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      DEMO_RESET_SECRET: ${DEMO_RESET_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); exit(0 if r.getcode()==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+  publisher:
+    build:
+      context: ./publisher
+      dockerfile: Dockerfile
+    environment:
+      MONAD_RPC_URL: ${MONAD_RPC_URL:-https://testnet-rpc.monad.xyz}
+      PUBLISHER_PRIVATE_KEY: ${PUBLISHER_PRIVATE_KEY}
+      TELEMETRY_CONTRACT_ADDRESS: ${TELEMETRY_CONTRACT_ADDRESS}
+      SITE_ID: ${SITE_ID:-1}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-5000}
+    depends_on:
+      - backend
+
+volumes:
+  solartick_pgdata:

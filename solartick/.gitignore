@@ -1,0 +1,6 @@
+.env
+node_modules
+contracts/artifacts
+contracts/cache
+contracts/dist
+*.log
