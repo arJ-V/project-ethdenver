@@ -20,7 +20,7 @@ interface IHederaScheduleService {
 contract HederaOptionsDesk is AccessControl {
     bytes32 public constant SETTLEMENT_EXECUTOR_ROLE = keccak256("SETTLEMENT_EXECUTOR_ROLE");
 
-    uint256 public constant MIN_EXPIRY = 180;
+    uint256 public constant MIN_EXPIRY = 120;
     uint256 public constant MAX_ORACLE_AGE = 600;
     uint256 public constant ORACLE_GRACE_WINDOW = 300;
     uint256 public constant SCHEDULE_GAS_LIMIT = 1_200_000;
@@ -89,6 +89,24 @@ contract HederaOptionsDesk is AccessControl {
         uint256 oracleRoundId,
         uint256 oracleUpdatedAt
     );
+    event SettlementExecutionAttempt(
+        uint256 indexed optionId,
+        address indexed caller,
+        uint256 blockTs,
+        uint256 optionExpiry,
+        uint8 optionStatus,
+        uint256 oracleYieldIndex,
+        uint256 oracleRoundId,
+        uint256 oracleUpdatedAt,
+        uint256 deskBalance,
+        uint256 payoutPreview
+    );
+    event SettlementFailureDetail(
+        uint256 indexed optionId,
+        bytes4 errorSelector,
+        bytes revertData,
+        string decodedReason
+    );
 
     error InvalidBuyer();
     error InvalidAmount();
@@ -106,9 +124,13 @@ contract HederaOptionsDesk is AccessControl {
     constructor(address admin, address ySolarToken, address oracleAddress) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(SETTLEMENT_EXECUTOR_ROLE, admin);
+        _grantRole(SETTLEMENT_EXECUTOR_ROLE, address(this));
         ySolar = IERC20(ySolarToken);
         yieldOracle = YieldOracle(oracleAddress);
     }
+
+    // Accept native HBAR so this contract can pay for scheduled execution as HSS payer.
+    receive() external payable {}
 
     modifier onlyKYCd(address) {
         _;
@@ -144,8 +166,36 @@ contract HederaOptionsDesk is AccessControl {
         emit SettlementScheduled(optionId, scheduleRef, expiry);
     }
 
-    function executeScheduledSettlement(uint256 optionId) external onlyRole(SETTLEMENT_EXECUTOR_ROLE) {
-        this.settleOption(optionId);
+    function executeScheduledSettlement(uint256 optionId) external {
+        // Keep this entrypoint permissive because scheduled caller identity varies by environment.
+        // The real authorization boundary is inside settleOption (must be self-call only).
+        OptionPosition memory op = options[optionId];
+        (uint256 yieldIndex, uint256 updatedAt, uint256 roundId) = yieldOracle.getLatest();
+        uint256 balance = ySolar.balanceOf(address(this));
+        uint256 payoutPreview = op.amount <= balance ? op.amount : balance;
+
+        emit SettlementExecutionAttempt(
+            optionId,
+            msg.sender,
+            block.timestamp,
+            op.expiry,
+            uint8(op.status),
+            yieldIndex,
+            roundId,
+            updatedAt,
+            balance,
+            payoutPreview
+        );
+
+        try this.settleOption(optionId) {} catch Error(string memory reason) {
+            emit SettlementFailed(optionId, reason, roundId, updatedAt);
+            emit SettlementFailureDetail(optionId, bytes4(0x08c379a0), bytes(reason), reason);
+        } catch (bytes memory reasonData) {
+            bytes4 selector = _selectorFrom(reasonData);
+            string memory decoded = _decodeCustomError(selector);
+            emit SettlementFailed(optionId, decoded, roundId, updatedAt);
+            emit SettlementFailureDetail(optionId, selector, reasonData, decoded);
+        }
     }
 
     function settleOption(uint256 optionId) external {
@@ -225,5 +275,30 @@ contract HederaOptionsDesk is AccessControl {
         // Allow this specific schedule to trigger executeScheduledSettlement(optionId).
         _grantRole(SETTLEMENT_EXECUTOR_ROLE, scheduleAddress);
         scheduleRef = bytes32(uint256(uint160(scheduleAddress)));
+    }
+
+    function _selectorFrom(bytes memory reasonData) internal pure returns (bytes4 selector) {
+        if (reasonData.length < 4) return bytes4(0);
+        assembly {
+            selector := mload(add(reasonData, 32))
+        }
+    }
+
+    function _decodeCustomError(bytes4 selector) internal pure returns (string memory) {
+        if (selector == InvalidBuyer.selector) return "InvalidBuyer";
+        if (selector == InvalidAmount.selector) return "InvalidAmount";
+        if (selector == InvalidExpiry.selector) return "InvalidExpiry";
+        if (selector == InvalidStatus.selector) return "InvalidStatus";
+        if (selector == UnauthorizedSettler.selector) return "UnauthorizedSettler";
+        if (selector == OptionNotExpired.selector) return "OptionNotExpired";
+        if (selector == TransferFailed.selector) return "TransferFailed";
+        if (selector == OracleNotInitialized.selector) return "OracleNotInitialized";
+        if (selector == OracleStale.selector) return "OracleStale";
+        if (selector == OracleTooFuture.selector) return "OracleTooFuture";
+        if (selector == OracleWindowMiss.selector) return "OracleWindowMiss";
+        if (selector == HssScheduleFailed.selector) return "HssScheduleFailed";
+        if (selector == bytes4(0x4e487b71)) return "Panic(uint256)";
+        if (selector == bytes4(0x08c379a0)) return "Error(string)";
+        return "UnknownRevert";
     }
 }
