@@ -33,6 +33,8 @@ contract HederaOptionsDesk is AccessControl {
     uint256 public constant MAX_ORACLE_AGE = 600;
     uint256 public constant ORACLE_GRACE_WINDOW = 300;
     uint256 public constant SCHEDULE_GAS_LIMIT = 800_000; // Reduced from 1,200,000 to avoid SCHEDULE_EXPIRY_IS_BUSY (161)
+    /// Seconds after option expiry when HSS is scheduled to run. Ensures block.timestamp >= option expiry when settlement runs.
+    uint256 public constant SCHEDULE_EXECUTION_BUFFER = 5;
     address public constant HSS_PRECOMPILE = address(0x16b);
     int64 public constant HEDERA_SUCCESS = 22;
     uint256 public constant MIN_HBAR_BALANCE = 1_000_000_000; // 1 HBAR in tinybars (minimum for scheduled execution)
@@ -283,6 +285,8 @@ contract HederaOptionsDesk is AccessControl {
 
         // Schedule the role-gated entrypoint; it internally self-calls settleOption().
         // This keeps settleOption authorization strict while handling Hedera schedule caller semantics.
+        // Schedule execution at expiry + buffer so block.timestamp is always >= option expiry when HSS runs.
+        uint256 scheduleAt = expiry + SCHEDULE_EXECUTION_BUFFER;
         bytes memory callData = abi.encodeCall(this.executeScheduledSettlement, (optionId));
         
         // Try scheduleCallWithPayer first to explicitly set contract as payer.
@@ -294,7 +298,7 @@ contract HederaOptionsDesk is AccessControl {
         try IHederaScheduleService(HSS_PRECOMPILE).scheduleCallWithPayer(
             address(this),  // to: contract will be called
             address(this),   // payer: contract pays for execution (must have HBAR balance)
-            expiry,
+            scheduleAt,
             SCHEDULE_GAS_LIMIT,
             0,
             callData
@@ -306,7 +310,7 @@ contract HederaOptionsDesk is AccessControl {
             // With scheduleCall, the transaction originator (original caller) pays for execution
             (code, scheduleAddress) = IHederaScheduleService(HSS_PRECOMPILE).scheduleCall(
                 address(this),
-                expiry,
+                scheduleAt,
                 SCHEDULE_GAS_LIMIT,
                 0,
                 callData

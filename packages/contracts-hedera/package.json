@@ -8,6 +8,7 @@
     "demo:settle": "hardhat run scripts/demo-write-and-settle.js",
     "test:order": "hardhat run scripts/test-order-submission.js",
     "deploy:testnet": "hardhat run scripts/deploy-testnet.js --network hederaTestnet",
+    "deploy:desk": "hardhat run scripts/deploy-desk-only.js --network hederaTestnet",
     "prove:hss": "hardhat run scripts/prove-hss-loop.js --network hederaTestnet"
   },
   "dependencies": {

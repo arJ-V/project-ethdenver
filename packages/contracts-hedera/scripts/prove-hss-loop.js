@@ -499,7 +499,7 @@ async function main() {
   console.log("");
   
   const start = Date.now();
-  const maxWaitMs = 4 * 60 * 1000;
+  const maxWaitMs = (4 * 60 + 30) * 1000; // 4.5 min to account for SCHEDULE_EXECUTION_BUFFER (5s) + network variance
   let pollCount = 0;
   
   while (Date.now() - start < maxWaitMs) {
@@ -589,7 +589,7 @@ async function main() {
       if (details.length > 0) {
         console.log("ℹ SettlementFailureDetail events:", details.length);
         details.forEach((e, i) => {
-          const selector = ev.args.errorSelector;
+          const selector = e.args.errorSelector;
           console.log(`  Detail ${i + 1}:`);
           console.log(`    TX:`, e.transactionHash);
           console.log(`    Selector:`, selector);
