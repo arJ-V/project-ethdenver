@@ -6,7 +6,8 @@
     "packages/contracts-adi",
     "packages/contracts-hedera",
     "packages/relayer-python",
-    "packages/ai-copilot"
+    "packages/ai-copilot",
+    "packages/trading-api"
   ],
   "scripts": {
     "preflight": "node scripts/preflight-check.js",

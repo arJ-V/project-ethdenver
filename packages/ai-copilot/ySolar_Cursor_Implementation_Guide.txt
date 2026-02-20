@@ -1,0 +1,551 @@
+﻿ySolar AI Copilot
+Cursor Implementation Guide
+Python Backend  ·  0G Inference  ·  Hedera Options Desk Integration
+1. Project Overview & Scope
+This document is the single source of truth for building the ySolar AI Copilot in Python. The teammate team owns the Hedera smart contracts and the React UI. This codebase owns: the 0G inference integration, two-mode agent logic (Ask and Trade), the off-chain intent store, and the REST API that the UI calls.
+
+
+NOT in scope: Hedera smart contracts, React frontend, QuickNode telemetry ingestion, ADI Chain vault, Hedera Schedule Service.
+
+
+IN scope: A Python FastAPI service running the AI agent, managing conversation state, validating trade intents, and exposing REST endpoints consumed by the React UI and that trigger on-chain writeOption() calls.
+
+
+2. Architecture
+2.1 Two-Mode Agent (Cursor-Style)
+The agent has two modes sharing the same 0G inference model and the same conversation history. Only the system prompt changes on mode switch. Context is NEVER cleared.
+
+
+Property
+	ASK Mode
+	TRADE Mode
+	Purpose
+	Conversational analyst. Explore strategies, reason about telemetry.
+	Execution terminal. Parse intent, validate, output writeOption() JSON.
+	System Prompt
+	Loose, analytical. Verbose encouraged. Step-by-step reasoning.
+	Strict. Output ONLY valid JSON. Ask one question if ambiguous. Never guess.
+	Output
+	Natural language. Markdown OK.
+	JSON intent object + one-sentence confirmation.
+	Transactions
+	None. Read-only.
+	Produces validated intent -> triggers /intents/submit on user confirmation.
+	Temperature
+	0.7 — exploratory
+	0.2 — precise and deterministic
+	
+
+2.2 Context Switching Behaviour
+When the UI flips the mode toggle, it sends the new mode on the next /chat request. The backend detects the change, swaps the system prompt, and appends a handoff instruction: 'Review the conversation above, extract the trade parameters discussed, summarise them for the user, and ask for confirmation before generating the JSON payload.' The history is untouched.
+
+
+The UI inserts a visual divider in the thread: '-- switched to TRADE MODE --'. This is UI-only; the backend does not store this marker.
+
+
+3. Tech Stack & Dependencies
+3.1 requirements.txt
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+openai>=1.30.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+# Community Python 0G client:
+# pip install git+https://github.com/DormintLab/python-0g
+
+
+Note on 0G Python: The official 0G SDK is TypeScript only. The a0g community package (DormintLab/python-0g) reverse-engineers the TS SDK and provides an OpenAI-compatible client. It requires Node.js installed on the machine. If it gives issues, see the fallback in Section 5.
+
+
+3.2 .env
+# 0G Network (Galileo Testnet)
+A0G_PRIVATE_KEY=your_wallet_private_key_hex
+A0G_RPC_URL=https://evmrpc-testnet.0g.ai
+A0G_PROVIDER_ADDRESS=0xa48f01287233509FD694a22Bf840225062E67836
+A0G_MODEL=qwen-2.5-7b-instruct
+
+
+# Hedera teammate API
+HEDERA_API_BASE_URL=http://localhost:3001
+
+
+# App
+PORT=8000
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+
+
+4. Project Structure
+ysolar-agent/
+  main.py                    # FastAPI app entry point
+  .env
+  requirements.txt
+  agents/
+    __init__.py
+    client.py              # 0G inference client initialisation
+    prompts.py             # System prompts for Ask and Trade modes
+    agent.py               # Session management, mode switching, chat loop
+  intents/
+    __init__.py
+    schema.py              # Pydantic models + validation
+    store.py               # In-memory intent store
+  routers/
+    __init__.py
+    chat.py                # POST /chat
+    intents.py             # POST /intents, POST /intents/{id}/submit, GET /intents/{id}
+  hedera/
+    __init__.py
+    client.py              # httpx wrapper for teammate Hedera API
+
+
+5. 0G Inference Client
+5.1 Provider Info (Galileo Testnet)
+* Provider address: 0xa48f01287233509FD694a22Bf840225062E67836
+* Model: qwen-2.5-7b-instruct
+* RPC: https://evmrpc-testnet.0g.ai
+
+
+5.2 agents/client.py
+from a0g.base import A0G
+from openai import OpenAI
+import os
+
+
+_a0g: A0G | None = None
+_client: OpenAI | None = None
+
+
+def get_0g_client() -> OpenAI:
+    global _a0g, _client
+    if _client is None:
+        _a0g = A0G(
+            private_key=os.environ['A0G_PRIVATE_KEY'],
+            rpc_url=os.environ['A0G_RPC_URL']
+        )
+        provider = os.environ['A0G_PROVIDER_ADDRESS']
+        _client = _a0g.get_openai_client(provider)
+    return _client
+
+
+Fallback if a0g package fails
+If Node.js dependency issues arise, replace the above with a plain OpenAI client pointed at the provider URL. Retrieve the endpoint URL manually from the 0G serving contract (it is a public field) and hard-code it for the demo.
+# Fallback: plain OpenAI client
+from openai import OpenAI
+
+
+def get_0g_client() -> OpenAI:
+    # Replace with actual provider endpoint from 0G serving contract
+    return OpenAI(
+        base_url='https://<provider-endpoint>/v1',
+        api_key='placeholder'
+    )
+
+
+6. System Prompts — agents/prompts.py
+
+
+ASK_SYSTEM_PROMPT = """
+You are a sophisticated yield trading analyst for the ySolar platform.
+ySOLAR is a tokenised yield instrument backed by a live solar grid.
+The grid's real-time performance (wattage, battery %, weather) is
+streamed to the user's dashboard via QuickNode.
+
+
+Your role in ASK mode:
+- Help the user analyse yield trends and covered call strategies on ySOLAR
+- Reason step by step. Be thorough and analytical.
+- Reference any telemetry data the user provides
+- You do NOT execute trades in this mode — analysis only
+
+
+Context on the product:
+A covered call on ySOLAR means the writer locks ySOLAR as collateral
+and sells the right to buy at a strike price before expiry. Settlement
+is automated by the Hedera Schedule Service — no human intervention needed.
+"""
+
+
+TRADE_SYSTEM_PROMPT = """
+You are the execution engine for the ySolar options desk (TRADE mode).
+Your ONLY job is to extract trade parameters and output a valid JSON intent.
+
+
+RULES (non-negotiable):
+1. Output ONLY a JSON object matching the schema below. No prose before it.
+2. After the JSON, write ONE confirmation sentence.
+3. If any required field is missing or ambiguous, ask ONE clarifying question.
+   Never guess. Never invent addresses or amounts.
+4. expiry must be Unix timestamp. 30 days = int(time.time()) + 2592000.
+   expiry must be >= now + 180 seconds (contract minimum).
+5. amount and strike must be positive integers.
+
+
+Required schema:
+{
+  "product": "covered_call",
+  "underlying": "ySOLAR",
+  "writer": "<wallet_address>",
+  "buyer": "<wallet_address>",
+  "amount": <integer>,
+  "strike": <integer>,
+  "expiry": <unix_timestamp_integer>
+}
+"""
+
+
+TRADE_CONTEXT_HANDOFF = """
+The user has just switched from ASK mode to TRADE mode.
+Review the conversation above. Extract any trade parameters already discussed
+(amount, strike, expiry/duration, buyer address). Summarise what you found
+and ask the user to confirm before generating the JSON payload.
+"""
+
+
+7. Agent Logic — agents/agent.py
+from agents.client import get_0g_client
+from agents.prompts import ASK_SYSTEM_PROMPT, TRADE_SYSTEM_PROMPT, TRADE_CONTEXT_HANDOFF
+import json, os
+
+
+MODEL = os.environ.get('A0G_MODEL', 'qwen-2.5-7b-instruct')
+
+
+class AgentSession:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.mode = 'ask'
+        self.last_mode = 'ask'
+        self.history: list[dict] = []
+
+
+    def switch_mode(self, new_mode: str):
+        self.last_mode = self.mode
+        self.mode = new_mode
+
+
+    def _build_messages(self, user_message: str) -> list[dict]:
+        if self.mode == 'trade':
+            system = TRADE_SYSTEM_PROMPT
+            # First Trade message after Ask: append handoff instruction
+            if self.last_mode == 'ask' and len(self.history) > 0:
+                system += '' + TRADE_CONTEXT_HANDOFF
+        else:
+            system = ASK_SYSTEM_PROMPT
+        messages = [{'role': 'system', 'content': system}]
+        messages += self.history
+        messages.append({'role': 'user', 'content': user_message})
+        return messages
+
+
+    def chat(self, user_message: str) -> dict:
+        client = get_0g_client()
+        messages = self._build_messages(user_message)
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.2 if self.mode == 'trade' else 0.7,
+            max_tokens=1024,
+        )
+        content = response.choices[0].message.content
+        self.history.append({'role': 'user', 'content': user_message})
+        self.history.append({'role': 'assistant', 'content': content})
+        self.last_mode = self.mode
+        intent = _try_extract_intent(content) if self.mode == 'trade' else None
+        return {'content': content, 'mode': self.mode, 'intent': intent}
+
+
+def _try_extract_intent(text: str) -> dict | None:
+    try:
+        start = text.index('{')
+        end = text.rindex('}') + 1
+        return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+_sessions: dict[str, AgentSession] = {}
+
+
+def get_or_create_session(sid: str) -> AgentSession:
+    if sid not in _sessions:
+        _sessions[sid] = AgentSession(sid)
+    return _sessions[sid]
+
+
+8. Intent Schema — intents/schema.py
+Mirrors the teammate's intent schema and enforces on-chain contract constraints (expiry >= now + 180, positive integers).
+
+
+from pydantic import BaseModel, field_validator
+from enum import Enum
+import uuid, time
+
+
+class IntentStatus(str, Enum):
+    draft = 'draft'
+    approved = 'approved'
+    submitted = 'submitted'
+    confirmed = 'confirmed'
+    failed = 'failed'
+
+
+class TradeIntent(BaseModel):
+    intent_id: str = ''
+    writer: str
+    buyer: str
+    product: str = 'covered_call'
+    underlying: str = 'ySOLAR'
+    amount: int
+    strike: int
+    expiry: int
+    status: IntentStatus = IntentStatus.draft
+    tx_hash: str | None = None
+
+
+    @field_validator('amount', 'strike')
+    def must_be_positive(cls, v):
+        if v <= 0: raise ValueError('must be positive')
+        return v
+
+
+    @field_validator('expiry')
+    def must_be_future(cls, v):
+        if v < int(time.time()) + 180:
+            raise ValueError('expiry must be at least 180 seconds from now')
+        return v
+
+
+    def model_post_init(self, __context):
+        if not self.intent_id:
+            self.intent_id = str(uuid.uuid4())
+
+
+8.1 intents/store.py
+from intents.schema import TradeIntent
+
+
+_intents: dict[str, TradeIntent] = {}
+
+
+def save_intent(i: TradeIntent) -> TradeIntent:
+    _intents[i.intent_id] = i
+    return i
+
+
+def get_intent(intent_id: str) -> TradeIntent | None:
+    return _intents.get(intent_id)
+
+
+def update_status(intent_id: str, status: str, tx_hash: str | None = None):
+    i = _intents.get(intent_id)
+    if i:
+        i.status = status
+        if tx_hash: i.tx_hash = tx_hash
+
+
+9. REST API Endpoints
+9.1 routers/chat.py — POST /chat
+from fastapi import APIRouter
+from pydantic import BaseModel
+from agents.agent import get_or_create_session
+
+
+router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+    mode: str = 'ask'   # UI sends current toggle state on every message
+
+
+@router.post('/chat')
+async def chat(req: ChatRequest):
+    session = get_or_create_session(req.session_id)
+    if session.mode != req.mode:
+        session.switch_mode(req.mode)
+    result = session.chat(req.message)
+    return {
+        'session_id': req.session_id,
+        'mode': result['mode'],
+        'content': result['content'],
+        'intent': result.get('intent')  # None in Ask; JSON object in Trade
+    }
+
+
+9.2 routers/intents.py
+from fastapi import APIRouter, HTTPException
+from intents.schema import TradeIntent
+from intents.store import save_intent, get_intent, update_status
+from hedera.client import submit_to_hedera
+
+
+router = APIRouter(prefix='/intents')
+
+
+@router.post('')
+async def create_intent(data: dict):
+    intent = TradeIntent(**data)
+    return save_intent(intent).model_dump()
+
+
+@router.get('/{intent_id}')
+async def get(intent_id: str):
+    intent = get_intent(intent_id)
+    if not intent: raise HTTPException(404, 'Not found')
+    return intent.model_dump()
+
+
+@router.post('/{intent_id}/submit')
+async def submit(intent_id: str):
+    intent = get_intent(intent_id)
+    if not intent: raise HTTPException(404, 'Not found')
+    if intent.status not in ['draft', 'approved']:
+        raise HTTPException(400, f'Cannot submit status={intent.status}')
+    result = await submit_to_hedera(intent)
+    update_status(intent_id, result['status'], result.get('tx_hash'))
+    return get_intent(intent_id).model_dump()
+
+
+10. Hedera API Client — hedera/client.py
+Wraps the teammate's Hedera backend. Maps our intent object to their writeOption() call. Confirm the exact endpoint path with the Hedera teammate — update HEDERA_API_BASE_URL once they deploy.
+
+
+import httpx, os
+from intents.schema import TradeIntent
+
+
+BASE = os.environ.get('HEDERA_API_BASE_URL', 'http://localhost:3001')
+
+
+async def submit_to_hedera(intent: TradeIntent) -> dict:
+    payload = {
+        'buyer': intent.buyer,
+        'amount': str(intent.amount),
+        'strike': str(intent.strike),
+        'expiry': intent.expiry,
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            # Confirm endpoint path with Hedera teammate
+            r = await client.post(f'{BASE}/write-option', json=payload)
+            r.raise_for_status()
+            data = r.json()
+            return {'status': 'submitted', 'tx_hash': data.get('txHash')}
+        except httpx.HTTPError as e:
+            return {'status': 'failed', 'error': str(e)}
+
+
+MOCK for dev: If the Hedera API is not ready, replace the httpx call with: return {'status': 'submitted', 'tx_hash': 'mock-tx-0x123'}
+
+
+11. main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from routers import chat, intents
+from dotenv import load_dotenv
+import os
+
+
+load_dotenv()
+app = FastAPI(title='ySolar AI Copilot')
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get('CORS_ORIGINS','*').split(','),
+    allow_credentials=True, allow_methods=['*'], allow_headers=['*']
+)
+
+
+app.include_router(chat.router)
+app.include_router(intents.router)
+
+
+@app.get('/health')
+def health(): return {'status': 'ok'}
+
+
+12. UI Integration Contract (Share with React team)
+12.1 Chat Flow
+* UI calls POST /chat with { session_id, message, mode } on every send
+* session_id: generated by UI on page load (e.g. crypto.randomUUID()), stored in React state
+* mode: 'ask' or 'trade' — UI sends the current toggle state on every message
+* Response: { session_id, mode, content, intent }
+* intent is null in Ask mode. In Trade mode it is either null (model asking a clarifying question) or a JSON object with the extracted parameters.
+
+
+12.2 Trade Execution Flow
+1. When intent is non-null in a Trade-mode response, render the JSON as a formatted code block in the chat bubble.
+2. Show a 'SIGN & BROADCAST' button beneath the code block.
+3. On click, POST /intents with the intent JSON as the body. Receive back an object with intent_id and status='draft'.
+4. Immediately POST /intents/{intent_id}/submit to trigger on-chain execution.
+5. Poll GET /intents/{intent_id} every 2 seconds until status is 'confirmed' or 'failed'. Update UI accordingly.
+
+
+12.3 Mode Switch
+When the toggle changes, the UI should: (1) insert a system message divider in the chat thread, (2) send the next user message with the new mode value. The backend detects the change automatically. No separate mode-switch endpoint needed.
+
+
+13. Demo Script for Judges
+
+
+6. ASK mode — Type: 'The solar grid is at 847kW, battery 62%. Is this a good time to write a covered call?' Model reasons through yield performance using 0G inference live.
+7. Follow up — Type: 'What strike price for a 30-day covered call on 10,000 ySOLAR?' Model gives risk-adjusted analysis with a suggested strike.
+8. Switch to TRADE mode — Flip the toggle. Thread shows the mode divider. Type: 'Great, let's do it.' Model reads history, summarises parameters, outputs JSON payload.
+9. Execute — Click SIGN & BROADCAST. Watch status: draft -> submitted -> confirmed. Point to the Hedera HSS scheduled settlement transaction.
+Total runtime: ~3-4 minutes. Practice this sequence before the demo.
+
+
+14. Known Risks & Mitigations
+
+
+Risk
+	Likelihood
+	Mitigation
+	a0g package has Node.js issues
+	Medium
+	Use the plain OpenAI fallback client (Section 5.2). Same interface, no Node dependency.
+	0G Galileo provider offline at demo time
+	Medium
+	Test provider 1hr before. Keep OpenAI or Claude as a 2-min fallback (same code, change base_url and api_key).
+	Qwen model outputs malformed JSON in Trade mode
+	Medium
+	_try_extract_intent() handles this gracefully. The model will re-ask. Low temperature (0.2) reduces frequency.
+	Hedera teammate API not ready in time
+	Low
+	Use the mock return value in hedera/client.py. Demo still shows the full AI flow end-to-end.
+	Session lost on server restart
+	Expected
+	In-memory by design. Do not restart during demo. Optionally persist to SQLite with a 30-min migration.
+	
+
+15. Quick Start
+# 1. Create project and venv
+mkdir ysolar-agent && cd ysolar-agent
+python -m venv venv && source venv/bin/activate
+
+
+# 2. Install dependencies
+pip install fastapi uvicorn openai pydantic python-dotenv httpx
+pip install git+https://github.com/DormintLab/python-0g
+
+
+# 3. Set up .env with your private key and provider address
+
+
+# 4. Run the server
+uvicorn main:app --reload --port 8000
+
+
+# 5. Test health
+curl http://localhost:8000/health
+
+
+# 6. Test a chat in Ask mode
+curl -X POST http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"s1","message":"What is a covered call?","mode":"ask"}'
+
+
+-- End of Cursor Implementation Guide --
