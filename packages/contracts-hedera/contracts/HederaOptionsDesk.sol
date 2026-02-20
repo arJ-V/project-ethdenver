@@ -15,6 +15,15 @@ interface IHederaScheduleService {
         uint64 value,
         bytes calldata callData
     ) external returns (int64 responseCode, address scheduleAddress);
+
+    function scheduleCallWithPayer(
+        address to,
+        address payer,
+        uint256 expirySecond,
+        uint256 gasLimit,
+        uint64 value,
+        bytes calldata callData
+    ) external returns (int64 responseCode, address scheduleAddress);
 }
 
 contract HederaOptionsDesk is AccessControl {
@@ -23,9 +32,10 @@ contract HederaOptionsDesk is AccessControl {
     uint256 public constant MIN_EXPIRY = 120;
     uint256 public constant MAX_ORACLE_AGE = 600;
     uint256 public constant ORACLE_GRACE_WINDOW = 300;
-    uint256 public constant SCHEDULE_GAS_LIMIT = 1_200_000;
+    uint256 public constant SCHEDULE_GAS_LIMIT = 800_000; // Reduced from 1,200,000 to avoid SCHEDULE_EXPIRY_IS_BUSY (161)
     address public constant HSS_PRECOMPILE = address(0x16b);
     int64 public constant HEDERA_SUCCESS = 22;
+    uint256 public constant MIN_HBAR_BALANCE = 1_000_000_000; // 1 HBAR in tinybars (minimum for scheduled execution)
 
     enum OptionStatus {
         None,
@@ -131,6 +141,24 @@ contract HederaOptionsDesk is AccessControl {
 
     // Accept native HBAR so this contract can pay for scheduled execution as HSS payer.
     receive() external payable {}
+
+    /**
+     * @notice Fund the contract with HBAR to pay for scheduled executions.
+     * @dev The contract needs HBAR balance to pay for scheduled transaction execution fees.
+     * Anyone can fund the contract, but typically the admin or operator should ensure sufficient balance.
+     */
+    function fundContract() external payable {
+        // Accept HBAR donations for scheduled execution
+        // No minimum check here - caller can send any amount
+    }
+
+    /**
+     * @notice Check if contract has sufficient HBAR for scheduled execution.
+     * @dev Returns true if balance >= MIN_HBAR_BALANCE.
+     */
+    function hasSufficientHbar() external view returns (bool) {
+        return address(this).balance >= MIN_HBAR_BALANCE;
+    }
 
     modifier onlyKYCd(address) {
         _;
@@ -256,21 +284,44 @@ contract HederaOptionsDesk is AccessControl {
         // Schedule the role-gated entrypoint; it internally self-calls settleOption().
         // This keeps settleOption authorization strict while handling Hedera schedule caller semantics.
         bytes memory callData = abi.encodeCall(this.executeScheduledSettlement, (optionId));
-        (int64 code, address scheduleAddress) = IHederaScheduleService(HSS_PRECOMPILE).scheduleCall(
-            address(this),
+        
+        // Try scheduleCallWithPayer first to explicitly set contract as payer.
+        // If that fails (e.g., function not available), fall back to scheduleCall.
+        int64 code;
+        address scheduleAddress;
+        
+        // Attempt scheduleCallWithPayer (preferred - contract pays for execution)
+        try IHederaScheduleService(HSS_PRECOMPILE).scheduleCallWithPayer(
+            address(this),  // to: contract will be called
+            address(this),   // payer: contract pays for execution (must have HBAR balance)
             expiry,
             SCHEDULE_GAS_LIMIT,
             0,
             callData
-        );
+        ) returns (int64 _code, address _scheduleAddress) {
+            code = _code;
+            scheduleAddress = _scheduleAddress;
+        } catch {
+            // scheduleCallWithPayer not available or failed, try scheduleCall as fallback
+            // With scheduleCall, the transaction originator (original caller) pays for execution
+            (code, scheduleAddress) = IHederaScheduleService(HSS_PRECOMPILE).scheduleCall(
+                address(this),
+                expiry,
+                SCHEDULE_GAS_LIMIT,
+                0,
+                callData
+            );
+        }
 
         if (code != HEDERA_SUCCESS || scheduleAddress == address(0)) {
             revert HssScheduleFailed(code);
         }
 
-        // Some Hedera environments return non-success for explicit authorize on generalized calls.
-        // We intentionally ignore this response and rely on schedule semantics for execution.
-        IHederaScheduleService(HSS_PRECOMPILE).authorizeSchedule(scheduleAddress);
+        // NOTE: When the contract is both creator and payer (as set in scheduleCallWithPayer above),
+        // Hedera automatically and implicitly signs the schedule during creation.
+        // Therefore, calling authorizeSchedule() is redundant and will fail with error code 205
+        // (NO_NEW_VALID_SIGNATURES) because the schedule already has the required signatures.
+        // We skip the authorization step entirely - the schedule is ready to execute at expiry.
 
         // Allow this specific schedule to trigger executeScheduledSettlement(optionId).
         _grantRole(SETTLEMENT_EXECUTOR_ROLE, scheduleAddress);

@@ -4,9 +4,11 @@ dist
 artifacts
 cache
 .env
+.env.bak
+.env.local
+.env.*.local
 .pytest_cache
 __pycache__
-.env
 **/gasReporterOutput.json
 packages/relayer-python/.relayer_state.json
 docs/deployed-addresses.json

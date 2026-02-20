@@ -108,9 +108,21 @@ describe("HederaOptionsDesk", function () {
     await f.oracle.pushYieldIndex(900n);
     await time.increaseTo(expiry + 700n);
 
-    await expect(f.desk.executeScheduledSettlement(1n)).to.be.revertedWithCustomError(
-      f.desk,
-      "OracleStale"
-    );
+    // executeScheduledSettlement catches errors and emits SettlementFailed event
+    // instead of reverting, so we check for the event with OracleStale reason
+    const tx = await f.desk.executeScheduledSettlement(1n);
+    const receipt = await tx.wait();
+    const failedEvent = receipt.logs
+      .map((log) => {
+        try {
+          return f.desk.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((e) => e && e.name === "SettlementFailed");
+    
+    expect(failedEvent).to.not.be.null;
+    expect(failedEvent.args.reason).to.equal("OracleStale");
   });
 });
