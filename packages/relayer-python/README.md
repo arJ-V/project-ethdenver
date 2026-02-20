@@ -6,6 +6,11 @@ Unified backend service for:
 - Hedera ySolar mint relay
 - Oracle push updates before settlement windows
 
+Before running, set these contract addresses in `.env`:
+- `ADI_VAULT_ADDRESS`
+- `HEDERA_YSOLAR_ADDRESS`
+- `ORACLE_CONTRACT_ADDRESS`
+
 Run with:
 
 ```bash

@@ -5,13 +5,27 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./YieldOracle.sol";
 
+interface IHederaScheduleService {
+    function authorizeSchedule(address scheduleAddress) external returns (int64 responseCode);
+
+    function scheduleCall(
+        address to,
+        uint256 expirySecond,
+        uint256 gasLimit,
+        uint64 value,
+        bytes calldata callData
+    ) external returns (int64 responseCode, address scheduleAddress);
+}
+
 contract HederaOptionsDesk is AccessControl {
     bytes32 public constant SETTLEMENT_EXECUTOR_ROLE = keccak256("SETTLEMENT_EXECUTOR_ROLE");
 
     uint256 public constant MIN_EXPIRY = 180;
     uint256 public constant MAX_ORACLE_AGE = 600;
     uint256 public constant ORACLE_GRACE_WINDOW = 300;
+    uint256 public constant SCHEDULE_GAS_LIMIT = 1_200_000;
     address public constant HSS_PRECOMPILE = address(0x16b);
+    int64 public constant HEDERA_SUCCESS = 22;
 
     enum OptionStatus {
         None,
@@ -87,6 +101,7 @@ contract HederaOptionsDesk is AccessControl {
     error OracleStale();
     error OracleTooFuture();
     error OracleWindowMiss();
+    error HssScheduleFailed(int64 responseCode);
 
     constructor(address admin, address ySolarToken, address oracleAddress) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -183,13 +198,32 @@ contract HederaOptionsDesk is AccessControl {
     }
 
     function _scheduleSettlement(uint256 optionId, uint256 expiry) internal returns (bytes32 scheduleRef) {
-        // Best-effort precompile call for testnet integration; local tests continue if unavailable.
-        bytes memory payload = abi.encodeWithSignature("schedule(uint256,uint256)", optionId, expiry);
-        (bool ok, ) = HSS_PRECOMPILE.call(payload);
-        if (ok) {
-            scheduleRef = keccak256(abi.encodePacked(block.chainid, optionId, expiry, "HSS"));
-        } else {
-            scheduleRef = keccak256(abi.encodePacked(block.chainid, optionId, expiry, "LOCAL"));
+        // Local hardhat does not expose the Hedera system precompile, so we synthesize a reference.
+        if (block.chainid == 31337) {
+            return keccak256(abi.encodePacked(block.chainid, optionId, expiry, "LOCAL_DEV"));
         }
+
+        // Schedule the role-gated entrypoint; it internally self-calls settleOption().
+        // This keeps settleOption authorization strict while handling Hedera schedule caller semantics.
+        bytes memory callData = abi.encodeCall(this.executeScheduledSettlement, (optionId));
+        (int64 code, address scheduleAddress) = IHederaScheduleService(HSS_PRECOMPILE).scheduleCall(
+            address(this),
+            expiry,
+            SCHEDULE_GAS_LIMIT,
+            0,
+            callData
+        );
+
+        if (code != HEDERA_SUCCESS || scheduleAddress == address(0)) {
+            revert HssScheduleFailed(code);
+        }
+
+        // Some Hedera environments return non-success for explicit authorize on generalized calls.
+        // We intentionally ignore this response and rely on schedule semantics for execution.
+        IHederaScheduleService(HSS_PRECOMPILE).authorizeSchedule(scheduleAddress);
+
+        // Allow this specific schedule to trigger executeScheduledSettlement(optionId).
+        _grantRole(SETTLEMENT_EXECUTOR_ROLE, scheduleAddress);
+        scheduleRef = bytes32(uint256(uint160(scheduleAddress)));
     }
 }

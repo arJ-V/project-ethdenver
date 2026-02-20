@@ -10,7 +10,11 @@
     "packages/ui-dashboard"
   ],
   "scripts": {
+    "preflight": "node scripts/preflight-check.js",
     "test": "npm run test -w contracts-adi && npm run test -w contracts-hedera",
-    "build": "npm run compile -w contracts-adi && npm run compile -w contracts-hedera"
+    "build": "npm run compile -w contracts-adi && npm run compile -w contracts-hedera",
+    "deploy:adi": "npm run deploy:testnet -w contracts-adi",
+    "deploy:hedera": "npm run deploy:testnet -w contracts-hedera",
+    "lock:adi": "npm run lock:live -w contracts-adi"
   }
 }

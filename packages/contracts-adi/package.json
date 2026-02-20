@@ -5,7 +5,9 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "demo:lock": "hardhat run scripts/demo-lock-asset.js"
+    "demo:lock": "hardhat run scripts/demo-lock-asset.js",
+    "deploy:testnet": "hardhat run scripts/deploy-testnet.js --network adiTestnet",
+    "lock:live": "hardhat run scripts/lock-live-asset.js --network adiTestnet"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0"

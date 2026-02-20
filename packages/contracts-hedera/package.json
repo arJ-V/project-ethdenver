@@ -5,7 +5,9 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "demo:settle": "hardhat run scripts/demo-write-and-settle.js"
+    "demo:settle": "hardhat run scripts/demo-write-and-settle.js",
+    "deploy:testnet": "hardhat run scripts/deploy-testnet.js --network hederaTestnet",
+    "prove:hss": "hardhat run scripts/prove-hss-loop.js --network hederaTestnet"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0"

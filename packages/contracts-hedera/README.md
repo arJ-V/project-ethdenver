@@ -19,3 +19,5 @@ Hedera-side Solidity contracts for yield tokenization and options clearing.
 - `npm run compile -w contracts-hedera`
 - `npm run test -w contracts-hedera`
 - `npm run demo:settle -w contracts-hedera`
+- `npm run deploy:testnet -w contracts-hedera`
+- `npm run prove:hss -w contracts-hedera`
