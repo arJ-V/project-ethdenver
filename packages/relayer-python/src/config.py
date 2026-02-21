@@ -25,6 +25,7 @@ class Config:
     action_max_retries: int
     action_retry_backoff_seconds: int
     local_state_file: str
+    database_url: str
 
 
 def load_config() -> Config:
@@ -49,4 +50,5 @@ def load_config() -> Config:
         action_max_retries=int(os.getenv("ACTION_MAX_RETRIES", "3")),
         action_retry_backoff_seconds=int(os.getenv("ACTION_RETRY_BACKOFF_SECONDS", "2")),
         local_state_file=os.getenv("LOCAL_STATE_FILE", ".relayer_state.json"),
+        database_url=os.getenv("DATABASE_URL", ""),
     )

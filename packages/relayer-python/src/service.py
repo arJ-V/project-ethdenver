@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Dict, Set, Tuple
 
 import requests
+import psycopg2
 from web3 import Web3
+from web3.exceptions import TimeExhausted
 
 from .config import load_config
 
@@ -33,6 +35,8 @@ YSOLAR_MINIMAL_ABI = [
     }
 ]
 
+# YieldOracle.pushYieldIndex(uint256 yieldIndex): reverts if yieldIndex==0 (ZeroYieldIndex);
+# caller must have ADMIN_ORACLE_ROLE (else AccessControlUnauthorizedAccount(account, role) = 0xe2517d3f...)
 ORACLE_MINIMAL_ABI = [
     {
         "inputs": [{"internalType": "uint256", "name": "yieldIndex", "type": "uint256"}],
@@ -72,10 +76,35 @@ def _build_and_send_tx(
     )
     signed = account.sign_transaction(tx)
     tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    try:
+        receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+    except TimeExhausted:
+        raise RuntimeError(
+            f"Transaction not in chain after 300s tx={tx_hash.hex()} "
+            "(network delay or dropped; check block explorer)"
+        ) from None
     if receipt.status != 1:
-        raise RuntimeError(f"Transaction failed tx={tx_hash.hex()}")
+        revert_msg = _get_revert_reason(web3, tx_builder, account.address, gas_limit)
+        raise RuntimeError(
+            f"Transaction failed tx={tx_hash.hex()} receipt_status={receipt.status} revert={revert_msg!r}"
+        )
     return tx_hash.hex()
+
+
+def _get_revert_reason(web3: Web3, tx_builder, from_address: str, gas_limit: int) -> str:
+    """Simulate the call to get contract revert reason (e.g. ZeroYieldIndex, access control)."""
+    try:
+        tx = tx_builder.build_transaction(
+            {
+                "from": from_address,
+                "gas": gas_limit,
+                "chainId": web3.eth.chain_id,
+            }
+        )
+        web3.eth.call(tx)
+    except Exception as e:
+        return str(e)
+    return "unknown"
 
 
 def mint_ysolar_on_hedera(
@@ -107,6 +136,15 @@ def push_oracle_update(
     oracle_address: str,
     yield_index: int,
 ) -> str:
+    # Contract: pushYieldIndex(uint256) reverts if yieldIndex == 0 (ZeroYieldIndex); caller must have ADMIN_ORACLE_ROLE
+    if yield_index == 0:
+        raise ValueError("yield_index must be non-zero (contract reverts with ZeroYieldIndex)")
+    logging.info(
+        "push_oracle_submit oracle=%s yield_index=%s (type=%s)",
+        oracle_address,
+        yield_index,
+        type(yield_index).__name__,
+    )
     oracle = hedera_web3.eth.contract(address=Web3.to_checksum_address(oracle_address), abi=ORACLE_MINIMAL_ABI)
     tx_hash = _build_and_send_tx(
         hedera_web3,
@@ -167,6 +205,50 @@ def _with_retry(action_name: str, fn, max_retries: int, backoff_seconds: int):
     raise RuntimeError(f"{action_name} failed after retries: {last_error}")
 
 
+def _process_one_oracle_queue_row(
+    database_url: str,
+    hedera_web3: Web3,
+    oracle_account,
+    oracle_contract_address: str,
+) -> bool:
+    """
+    Pop one row from oracle_pending_updates (webhook → backend → queue), push to Hedera, delete row.
+    Returns True if a row was processed, False if queue was empty.
+    """
+    conn = None
+    row_id = None
+    yield_index = None
+    try:
+        conn = psycopg2.connect(database_url)
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, yield_index FROM oracle_pending_updates ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            row_id, yield_index = row
+            yield_index = int(yield_index)
+            cur.execute("DELETE FROM oracle_pending_updates WHERE id = %s", (row_id,))
+        conn.commit()
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logging.warning("oracle_queue select/delete error=%s", exc)
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+    try:
+        push_oracle_update(hedera_web3, oracle_account, oracle_contract_address, yield_index)
+        logging.info("oracle_queue consumed id=%s yield_index=%s (QuickNode/webhook path)", row_id, yield_index)
+    except Exception as exc:
+        logging.error("oracle_queue push failed yield_index=%s error=%s (row already deleted)", yield_index, exc)
+    return True
+
+
 def _load_accounts(config) -> Tuple[object, object]:
     operator_account = Web3().eth.account.from_key(config.hedera_operator_key)
     oracle_key = config.oracle_admin_private_key or config.hedera_operator_key
@@ -180,18 +262,25 @@ def main() -> None:
     state_path = Path(config.local_state_file)
     state = _load_state(state_path)
 
-    if not config.adi_rpc_url or not config.adi_vault_address:
-        raise RuntimeError("Missing ADI_RPC_URL or ADI_VAULT_ADDRESS")
     if not config.hedera_rpc_url or not config.hedera_operator_key:
         raise RuntimeError("Missing HEDERA_RPC_URL or HEDERA_OPERATOR_KEY")
     if not config.hedera_ysolar_address:
         raise RuntimeError("Missing HEDERA_YSOLAR_ADDRESS")
     if not config.oracle_contract_address:
         raise RuntimeError("Missing ORACLE_CONTRACT_ADDRESS")
+    if not config.database_url:
+        raise RuntimeError("Missing DATABASE_URL (required for oracle queue from webhook)")
+    if not config.adi_rpc_url or not config.adi_vault_address:
+        raise RuntimeError("Missing ADI_RPC_URL or ADI_VAULT_ADDRESS")
 
     adi_web3 = Web3(Web3.HTTPProvider(config.adi_rpc_url))
     hedera_web3 = Web3(Web3.HTTPProvider(config.hedera_rpc_url))
     operator_account, oracle_account = _load_accounts(config)
+    logging.info(
+        "Oracle pusher address=%s (must have ADMIN_ORACLE_ROLE on YieldOracle %s)",
+        oracle_account.address,
+        config.oracle_contract_address,
+    )
 
     adi_contract = adi_web3.eth.contract(
         address=Web3.to_checksum_address(config.adi_vault_address),
@@ -203,37 +292,20 @@ def main() -> None:
     else:
         from_block = adi_web3.eth.block_number
 
-    heartbeat = {
-        "last_loop_ts": None,
-        "last_telemetry_source": None,
-        "last_telemetry_index": None,
-        "last_processed_event_key": None,
-    }
-
-    logging.info(
-        "Service started from_block=%s operator=%s telemetry_source=%s",
-        from_block,
-        operator_account.address,
-        config.telemetry_source,
-    )
+    logging.info("Service started from_block=%s operator=%s", from_block, operator_account.address)
 
     while True:
-        try:
-            latest_index = ingest_telemetry_and_compute_index(config)
-            heartbeat["last_telemetry_source"] = (config.telemetry_source or "mock").lower()
-            heartbeat["last_telemetry_index"] = latest_index
-            logging.info(
-                "TELEMETRY source=%s yield_index=%s",
-                heartbeat["last_telemetry_source"],
-                latest_index,
-            )
-        except Exception as exc:
-            logging.error("TELEMETRY_FAILED source=%s error=%s", config.telemetry_source, exc)
-            latest_index = _mock_yield_index()
-            heartbeat["last_telemetry_source"] = "mock_fallback"
-            heartbeat["last_telemetry_index"] = latest_index
-            logging.info("TELEMETRY fallback=mock yield_index=%s", latest_index)
+        # (1) Webhook → backend → oracle_pending_updates: drain one row and push to Hedera oracle
+        processed = _process_one_oracle_queue_row(
+            config.database_url,
+            hedera_web3,
+            oracle_account,
+            config.oracle_contract_address,
+        )
+        if processed:
+            logging.info("ORACLE_QUEUE pushed one yield_index from queue (QuickNode/webhook path)")
 
+        # (2) Poll ADI for YieldMintRequested; mint ySOLAR only (oracle updates come from queue above)
         try:
             to_block = adi_web3.eth.block_number
             if from_block > to_block:
@@ -246,8 +318,7 @@ def main() -> None:
             continue
 
         for log in logs:
-            chain_id = adi_web3.eth.chain_id
-            event_key = f"{chain_id}:{log['transactionHash'].hex()}:{log['logIndex']}"
+            event_key = f"{log['blockNumber']}:{log['transactionHash'].hex()}:{log['logIndex']}"
             if event_key in state["processed"]:
                 continue
 
@@ -265,28 +336,12 @@ def main() -> None:
             )
 
             try:
-                _with_retry(
-                    "mint_ysolar_on_hedera",
-                    lambda: mint_ysolar_on_hedera(
-                        hedera_web3,
-                        operator_account,
-                        config.hedera_ysolar_address,
-                        beneficiary,
-                        expected_yield_kwh,
-                    ),
-                    max_retries=max(1, config.action_max_retries),
-                    backoff_seconds=max(1, config.action_retry_backoff_seconds),
-                )
-                _with_retry(
-                    "push_oracle_update",
-                    lambda: push_oracle_update(
-                        hedera_web3,
-                        oracle_account,
-                        config.oracle_contract_address,
-                        latest_index,
-                    ),
-                    max_retries=max(1, config.action_max_retries),
-                    backoff_seconds=max(1, config.action_retry_backoff_seconds),
+                mint_ysolar_on_hedera(
+                    hedera_web3,
+                    operator_account,
+                    config.hedera_ysolar_address,
+                    beneficiary,
+                    expected_yield_kwh,
                 )
             except Exception as exc:
                 logging.error("Failed processing event key=%s error=%s", event_key, exc)
@@ -294,16 +349,8 @@ def main() -> None:
 
             state["processed"].add(event_key)
             _save_state(state_path, state)
-            heartbeat["last_processed_event_key"] = event_key
 
         from_block = to_block + 1
-        heartbeat["last_loop_ts"] = int(time.time())
-        logging.info(
-            "HEARTBEAT last_loop_ts=%s processed_count=%s last_event=%s",
-            heartbeat["last_loop_ts"],
-            len(state["processed"]),
-            heartbeat["last_processed_event_key"],
-        )
         time.sleep(4)
 
 
