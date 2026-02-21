@@ -134,25 +134,28 @@ def push_oracle_update(
     hedera_web3: Web3,
     oracle_account,
     oracle_address: str,
-    yield_index: int,
+    value: int,
 ) -> str:
-    # Contract: pushYieldIndex(uint256) reverts if yieldIndex == 0 (ZeroYieldIndex); caller must have ADMIN_ORACLE_ROLE
-    if yield_index == 0:
-        raise ValueError("yield_index must be non-zero (contract reverts with ZeroYieldIndex)")
+    """
+    Push oracle value to Hedera. Backend now sends asset price in cents; contract still calls it pushYieldIndex(uint256).
+    Contract reverts if value == 0 (ZeroYieldIndex).
+    """
+    if value == 0:
+        raise ValueError("oracle value must be non-zero (contract reverts with ZeroYieldIndex)")
     logging.info(
-        "push_oracle_submit oracle=%s yield_index=%s (type=%s)",
+        "push_oracle_submit oracle=%s price_cents=%s (type=%s)",
         oracle_address,
-        yield_index,
-        type(yield_index).__name__,
+        value,
+        type(value).__name__,
     )
     oracle = hedera_web3.eth.contract(address=Web3.to_checksum_address(oracle_address), abi=ORACLE_MINIMAL_ABI)
     tx_hash = _build_and_send_tx(
         hedera_web3,
         oracle_account,
-        oracle.functions.pushYieldIndex(yield_index),
+        oracle.functions.pushYieldIndex(value),
         gas_limit=250_000,
     )
-    logging.info("ACTION push_oracle status=confirmed yield_index=%s tx=%s", yield_index, tx_hash)
+    logging.info("ACTION push_oracle status=confirmed price_cents=%s tx=%s", value, tx_hash)
     return tx_hash
 
 
@@ -212,12 +215,12 @@ def _process_one_oracle_queue_row(
     oracle_contract_address: str,
 ) -> bool:
     """
-    Pop one row from oracle_pending_updates (webhook → backend → queue), push to Hedera, delete row.
+    Pop one row from oracle_pending_updates (backend enqueues asset price in cents), push to Hedera, delete row.
     Returns True if a row was processed, False if queue was empty.
     """
     conn = None
     row_id = None
-    yield_index = None
+    price_cents = None
     try:
         conn = psycopg2.connect(database_url)
         conn.autocommit = False
@@ -228,8 +231,8 @@ def _process_one_oracle_queue_row(
             row = cur.fetchone()
             if not row:
                 return False
-            row_id, yield_index = row
-            yield_index = int(yield_index)
+            row_id, price_cents = row
+            price_cents = int(price_cents)
             cur.execute("DELETE FROM oracle_pending_updates WHERE id = %s", (row_id,))
         conn.commit()
     except Exception as exc:
@@ -242,10 +245,10 @@ def _process_one_oracle_queue_row(
             conn.close()
 
     try:
-        push_oracle_update(hedera_web3, oracle_account, oracle_contract_address, yield_index)
-        logging.info("oracle_queue consumed id=%s yield_index=%s (QuickNode/webhook path)", row_id, yield_index)
+        push_oracle_update(hedera_web3, oracle_account, oracle_contract_address, price_cents)
+        logging.info("oracle_queue consumed id=%s price_cents=%s (webhook path)", row_id, price_cents)
     except Exception as exc:
-        logging.error("oracle_queue push failed yield_index=%s error=%s (row already deleted)", yield_index, exc)
+        logging.error("oracle_queue push failed price_cents=%s error=%s (row already deleted)", price_cents, exc)
     return True
 
 
@@ -303,7 +306,7 @@ def main() -> None:
             config.oracle_contract_address,
         )
         if processed:
-            logging.info("ORACLE_QUEUE pushed one yield_index from queue (QuickNode/webhook path)")
+            logging.info("ORACLE_QUEUE pushed one price_cents from queue (webhook path)")
 
         # (2) Poll ADI for YieldMintRequested; mint ySOLAR only (oracle updates come from queue above)
         try:
