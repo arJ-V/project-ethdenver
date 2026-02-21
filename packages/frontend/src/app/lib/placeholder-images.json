@@ -1,0 +1,17 @@
+
+{
+  "placeholderImages": [
+    {
+      "id": "asset-chart-placeholder",
+      "description": "Abstract financial market visualization",
+      "imageUrl": "https://picsum.photos/seed/market/800/400",
+      "imageHint": "financial chart"
+    },
+    {
+      "id": "issuer-header",
+      "description": "Professional clean corporate abstract",
+      "imageUrl": "https://picsum.photos/seed/corp/1200/300",
+      "imageHint": "corporate abstract"
+    }
+  ]
+}
