@@ -16,6 +16,7 @@
     "build": "npm run compile -w contracts-adi && npm run compile -w contracts-hedera",
     "deploy:adi": "npm run deploy:testnet -w contracts-adi",
     "deploy:hedera": "npm run deploy:testnet -w contracts-hedera",
+    "hedera:ensure": "./scripts/hedera-testnet-ensure.sh",
     "lock:adi": "npm run lock:live -w contracts-adi"
   }
 }

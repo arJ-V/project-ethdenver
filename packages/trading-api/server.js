@@ -14,6 +14,13 @@ import { createReadModelStore } from "./readModelStore.js";
 import { createIndexer } from "./indexer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Env load order MUST match contracts-hedera hardhat (root then relayer) so the writer key
+// is the same as manual-write-option.js. Otherwise we get ERC20InsufficientAllowance: the desk
+// was approved by one wallet but the API signs with another. See docs/HEDERA_E2E_NOTES.md.
+const rootEnv = path.join(__dirname, "..", "..", ".env");
+const relayerEnv = path.join(__dirname, "..", "relayer-python", ".env");
+if (existsSync(rootEnv)) dotenv.config({ path: rootEnv });
+if (existsSync(relayerEnv)) dotenv.config({ path: relayerEnv });
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -45,6 +52,20 @@ const ERROR_SELECTORS = {
   "0xbebf6f7c": "OracleTooFuture",
   "0x09f39f8b": "OracleWindowMiss",
   "0x327e2f4e": "HssScheduleFailed",
+  // Standard Error(string) from require("message")
+  "0x08c379a0": "Error(string)",
+  // HederaOptionsDesk (Solidity canonical ErrorName())
+  "0xb1df0e06": "InvalidBuyer",
+  "0x2c5211c6": "InvalidAmount",
+  "0xd36c8500": "InvalidExpiry",
+  "0x4eb0db8f": "OracleNotInitialized",
+  "0x04578698": "OracleStale",
+  "0x35e3fc12": "OracleTooFuture",
+  "0x0a32e144": "OracleWindowMiss",
+  "0xbd2f0308": "HssScheduleFailed",
+  // OpenZeppelin ERC20 (from ySolar transferFrom)
+  "0xfb8f41b2": "ERC20InsufficientAllowance",
+  "0xe450d38c": "ERC20InsufficientBalance",
 };
 
 function loadManifest() {
@@ -184,7 +205,11 @@ app.post("/write-option", requireApiKey, async (req, res) => {
     const decoded = selector && ERROR_SELECTORS[selector] ? ERROR_SELECTORS[selector] : null;
     const code = decoded ? `CONTRACT_${decoded.toUpperCase()}` : "WRITE_OPTION_FAILED";
     const status = err?.code === "INSUFFICIENT_FUNDS" ? 400 : 502;
-    return sendError(res, status, code, decoded || rawMessage, {
+    const message = decoded ? decoded : (selector ? `unknown custom error (selector: ${selector})` : rawMessage);
+    if (!decoded) {
+      console.error("[write-option] revert selector:", selector || "none", "data:", err?.data || err?.info?.error?.data || "(no data)", "code:", err?.code);
+    }
+    return sendError(res, status, code, message, {
       selector: selector || null,
       rpcCode: err?.code || null,
     });
@@ -266,9 +291,14 @@ function extractSelector(err) {
     err?.info?.error?.data ||
     err?.error?.data ||
     err?.error?.error?.data ||
+    err?.transaction?.data ||
     "";
   if (typeof data === "string" && data.startsWith("0x") && data.length >= 10) {
     return data.slice(0, 10).toLowerCase();
+  }
+  if (typeof data === "string" && data.length >= 8) {
+    const hex = data.startsWith("0x") ? data : "0x" + data;
+    if (hex.length >= 10) return hex.slice(0, 10).toLowerCase();
   }
   return null;
 }

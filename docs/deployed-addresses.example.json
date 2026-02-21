@@ -1,0 +1,13 @@
+{
+  "hedera": {
+    "network": "hederaTestnet",
+    "chainId": 296,
+    "deployer": "0xYourDeployerEVMAddress",
+    "ySolarAddress": "0x...",
+    "ySolarDeployTx": "0x...",
+    "oracleAddress": "0x...",
+    "oracleDeployTx": "0x...",
+    "optionsDeskAddress": "0x...",
+    "optionsDeskDeployTx": "0x..."
+  }
+}
