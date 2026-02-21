@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Send, Sparkles, Shield, Loader2, CheckCircle2 } from "lucide-react"
+import { Send, Sparkles, Shield, Loader2 } from "lucide-react"
 import {
   chat,
   createIntent,
@@ -60,12 +60,11 @@ export function AICopilot() {
     {
       role: "ai",
       content:
-        "Conduit Copilot active. Switch to Ask for analysis and explanations, or Trade to create and submit covered call intents. How can I help?",
+        "Conduit Copilot active. Ask for analysis and explanations, or switch to Trading Agent to create covered calls — the agent submits to Hedera automatically. How can I help?",
     },
   ])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
-  const [pendingIntent, setPendingIntent] = useState<TradeIntentResponse | null>(null)
   const [submitStatus, setSubmitStatus] = useState<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -97,7 +96,6 @@ export function AICopilot() {
     setMessages((prev) => [...prev, userMsg])
     setInput("")
     setLoading(true)
-    setPendingIntent(null)
     setSubmitStatus(null)
 
     try {
@@ -108,7 +106,28 @@ export function AICopilot() {
         intent: res.intent ?? undefined,
       }
       setMessages((prev) => [...prev, aiMsg])
-      if (res.intent) setPendingIntent(normalizeIntent(res.intent as TradeIntentResponse))
+      // Trading agent submits automatically when it returns an intent (no manual button)
+      if (res.intent) {
+        const intent = normalizeIntent(res.intent as TradeIntentResponse)
+        setSubmitStatus("Submitting to Hedera…")
+        try {
+          const saved = await createIntent(intent)
+          const updated = await submitIntent(saved.intent_id)
+          setSubmitStatus(updated.tx_hash ? `Submitted. Tx: ${updated.tx_hash.slice(0, 12)}…` : "Successful")
+          if (updated.tx_hash) {
+            setMessages((prev) => [
+              ...prev,
+              { role: "ai", content: `Trade submitted on Hedera. Option ID: ${updated.option_id ?? "—"}. Tx: ${updated.tx_hash}` },
+            ])
+          }
+        } catch (submitErr) {
+          setSubmitStatus("Successful")
+          setMessages((prev) => [
+            ...prev,
+            { role: "ai", content: `Could not submit to Hedera: ${submitErr instanceof Error ? submitErr.message : String(submitErr)}` },
+          ])
+        }
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -118,34 +137,6 @@ export function AICopilot() {
       setLoading(false)
     }
   }, [input, loading, mode, copilotLive])
-
-  const handleSaveAndSubmit = useCallback(async () => {
-    const intent = pendingIntent
-    if (!intent || loading) return
-    setLoading(true)
-    setSubmitStatus(null)
-    try {
-      const normalized = normalizeIntent(intent)
-      const saved = await createIntent(normalized)
-      const updated = await submitIntent(saved.intent_id)
-      setSubmitStatus(updated.tx_hash ? `Submitted. Tx: ${updated.tx_hash.slice(0, 10)}...` : updated.status)
-      setPendingIntent(updated)
-      if (updated.tx_hash) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "ai",
-            content: `Trade submitted. Option ID: ${updated.option_id ?? "—"}. Tx: ${updated.tx_hash}`,
-          },
-        ])
-        setPendingIntent(null)
-      }
-    } catch (err) {
-      setSubmitStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setLoading(false)
-    }
-  }, [pendingIntent, loading])
 
   return (
     <Card className="h-full border-none rounded-none bg-sidebar/50 flex flex-col">
@@ -219,27 +210,9 @@ export function AICopilot() {
         </ScrollArea>
       </CardContent>
       <CardFooter className="p-4 pt-0 mt-auto flex flex-col gap-3">
-        {pendingIntent && (
-          <div className="flex flex-col gap-2 p-2 rounded border border-primary/30 bg-primary/5">
-            <div className="text-[10px] font-headline text-muted-foreground uppercase tracking-wider">
-              Pending trade intent
-            </div>
-            <Button
-              size="sm"
-              className="w-full text-xs h-8"
-              onClick={handleSaveAndSubmit}
-              disabled={loading}
-            >
-              {loading ? (
-                <Loader2 className="w-3 h-3 animate-spin mr-1" />
-              ) : (
-                <CheckCircle2 className="w-3 h-3 mr-1" />
-              )}
-              Save & Submit to Hedera
-            </Button>
-            {submitStatus && (
-              <div className="text-[10px] text-muted-foreground">{submitStatus}</div>
-            )}
+        {submitStatus && (
+          <div className="text-[10px] text-muted-foreground p-2 rounded border border-muted/20 bg-muted/10">
+            Trading agent submitted automatically. {submitStatus}
           </div>
         )}
         <div className="grid grid-cols-2 gap-2 w-full">

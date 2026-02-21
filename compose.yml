@@ -102,6 +102,7 @@ services:
       - ./packages/trading-api/.env
     environment:
       PORT: "3001"
+      HEDERA_OPTIONS_DESK_ADDRESS: "0x236b10AF2ca89F3D9A47d367100F54d38C9487ff"
     ports:
       - "3001:3001"
 

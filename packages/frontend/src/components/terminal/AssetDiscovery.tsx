@@ -24,13 +24,17 @@ async function fetchRwaAssets(): Promise<Asset[]> {
   const rwas = await listRwas()
   const withPrices = await Promise.all(
     rwas.map(async (r: RwaListItem) => {
+      // Use latest price from Postgres (list_rwas includes latest_price_cents from rwa_timeseries)
       let priceStr = "—"
-      try {
-        const p = await getPrice(r.rwa_adi_id)
-        if (p.asset_price_cents != null)
-          priceStr = (p.asset_price_cents / 100).toFixed(2)
-      } catch {
-        if (r.latest_kwh != null) priceStr = `${(r.latest_kwh / 1000).toFixed(1)} KWH`
+      if (r.latest_price_cents != null) {
+        priceStr = (r.latest_price_cents / 100).toFixed(2)
+      } else {
+        try {
+          const p = await getPrice(r.rwa_adi_id)
+          if (p.asset_price_cents != null) priceStr = (p.asset_price_cents / 100).toFixed(2)
+        } catch {
+          if (r.latest_kwh != null) priceStr = `${(r.latest_kwh / 1000).toFixed(1)} KWH`
+        }
       }
       return {
         id: String(r.rwa_adi_id),

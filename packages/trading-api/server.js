@@ -96,6 +96,9 @@ const indexer = createIndexer({
   onError: (err) => console.warn("[indexer]", err.message || String(err)),
 });
 
+// Serialize write-option so only one tx is in flight per writer (avoids "existing transaction had higher priority" nonce conflicts).
+let writeOptionLock = Promise.resolve();
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -175,9 +178,26 @@ app.post("/write-option", requireApiKey, async (req, res) => {
   const wallet = new ethers.Wallet(WRITER_PRIVATE_KEY, provider);
   const desk = new ethers.Contract(DESK_ADDRESS, DESK_ABI, wallet);
 
-  try {
+  const runWrite = async () => {
     const tx = await desk.writeOption(buyer, amountBn, strikeBn, expiryBn);
     const receipt = await tx.wait();
+    return { tx, receipt };
+  };
+
+  try {
+    const prev = writeOptionLock;
+    let resolveLock;
+    writeOptionLock = new Promise((r) => { resolveLock = r; });
+    await prev;
+    let tx;
+    let receipt;
+    try {
+      const out = await runWrite();
+      tx = out.tx;
+      receipt = out.receipt;
+    } finally {
+      resolveLock();
+    }
     const iface = new ethers.Interface(DESK_ABI);
     let optionId = null;
     for (const log of receipt?.logs || []) {

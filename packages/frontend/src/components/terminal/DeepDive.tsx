@@ -73,11 +73,14 @@ export function DeepDive({ asset }: DeepDiveProps) {
   }
 
   const chartData = rwaChartData
+  // Preview price: always use latest from Postgres (getRwaLatest → rwa_timeseries) when loaded
   const displayPrice = rwaLatest
     ? `$${(rwaLatest.price_cents / 100).toFixed(2)}`
     : asset.price === "—" || asset.price.includes("KWH")
       ? asset.price
-      : `$${asset.price}`
+      : asset.price.startsWith("$")
+        ? asset.price
+        : `$${asset.price}`
   const changePct =
     rwaChartData.length >= 2
       ? ((rwaChartData[rwaChartData.length - 1].value - rwaChartData[0].value) / rwaChartData[0].value) * 100

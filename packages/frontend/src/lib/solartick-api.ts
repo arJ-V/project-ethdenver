@@ -31,6 +31,8 @@ export type RwaListItem = {
   rwa_adi_id: number;
   latest_kwh: number | null;
   latest_ts: string | null;
+  /** Latest price in cents from rwa_timeseries (Postgres). Use for preview. */
+  latest_price_cents?: number | null;
   asset_id?: number | null;
   bootstrap_status?: string | null;
   mint_tx_hash?: string | null;

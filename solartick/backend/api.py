@@ -402,7 +402,8 @@ async def list_rwas() -> list:
                r.hedera_mint_status,
                r.beneficiary_address,
                (SELECT kwh FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_kwh,
-               (SELECT ts FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_ts
+               (SELECT ts FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_ts,
+               (SELECT price_cents FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_price_cents
         FROM rwas r
         ORDER BY r.id
         """
@@ -412,6 +413,7 @@ async def list_rwas() -> list:
             "rwa_adi_id": int(r["rwa_id"]),
             "latest_kwh": int(r["latest_kwh"]) if r["latest_kwh"] is not None else None,
             "latest_ts": r["latest_ts"].isoformat() if r["latest_ts"] and hasattr(r["latest_ts"], "isoformat") else str(r["latest_ts"]) if r["latest_ts"] else None,
+            "latest_price_cents": int(r["latest_price_cents"]) if r["latest_price_cents"] is not None else None,
             "asset_id": int(r["adi_asset_id"]) if r["adi_asset_id"] is not None else None,
             "bootstrap_status": str(r["bootstrap_status"]) if r["bootstrap_status"] is not None else None,
             "mint_tx_hash": str(r["mint_tx_hash"]) if r["mint_tx_hash"] is not None else None,
@@ -498,8 +500,18 @@ async def history(
 
 @router.get("/price")
 async def price(site_id: int = Query(1)) -> dict:
-    """Current RWA asset price for the site in cents (integer). Checks telemetry_points, rwa_site_state, then rwa_timeseries."""
+    """Current asset price in cents. For RWA ids uses latest from rwa_timeseries; else telemetry_points, rwa_site_state, rwa_timeseries."""
     pool = await get_pool()
+    # If this id is an RWA, use latest price from rwa_timeseries only (authoritative for preview)
+    is_rwa = await pool.fetchval("SELECT 1 FROM rwas WHERE id = $1", site_id)
+    if is_rwa:
+        rwa_row = await pool.fetchrow(
+            "SELECT price_cents FROM rwa_timeseries WHERE rwa_id = $1 ORDER BY ts DESC LIMIT 1",
+            site_id,
+        )
+        if rwa_row is not None:
+            return {"site_id": site_id, "asset_price_cents": int(rwa_row["price_cents"])}
+        return {"site_id": site_id, "asset_price_cents": None}
     row = await pool.fetchrow(
         """
         SELECT asset_price_cents FROM telemetry_points

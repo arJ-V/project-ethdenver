@@ -89,17 +89,22 @@ async function fetchRwas(): Promise<RwaListItem[]> {
   return Array.isArray(data) ? data : [];
 }
 
-async function publishOnceRwa(rwaId: number, latestKwh: number): Promise<void> {
+async function publishOnceRwa(
+  rwaId: number,
+  latestKwh: number,
+  nonceOverride?: number
+): Promise<number> {
   const timestamp = BigInt(Math.floor(Date.now() / 1000));
   const wattHours = nextKwhFromLatest(latestKwh);
-  // Same format as before: watt_hours carries KWH; other fields null/zero per spec
   const batterySocBps = 0;
 
+  const overrides = nonceOverride !== undefined ? { nonce: nonceOverride } : {};
   const tx = await contract.publish(
     BigInt(rwaId),
     timestamp,
     wattHours,
-    batterySocBps
+    batterySocBps,
+    overrides
   );
   const receipt = await tx.wait();
   const txHash = receipt?.hash ?? tx.hash;
@@ -115,9 +120,10 @@ async function publishOnceRwa(rwaId: number, latestKwh: number): Promise<void> {
       tx_hash: txHash,
     })
   );
+  return nonceOverride !== undefined ? nonceOverride + 1 : (await provider.getTransactionCount(wallet.address, "pending"));
 }
 
-async function publishOnceLegacy(): Promise<void> {
+async function publishOnceLegacy(nonceOverride?: number): Promise<void> {
   const timestamp = BigInt(Math.floor(Date.now() / 1000));
   const wattHours = dayNightWattHours();
   const bps = nextBatterySocBps();
@@ -129,7 +135,14 @@ async function publishOnceLegacy(): Promise<void> {
     wattHours,
     batterySocBps: bps,
   };
-  const tx = await contract.publish(payload.siteId, payload.timestamp, payload.wattHours, payload.batterySocBps);
+  const overrides = nonceOverride !== undefined ? { nonce: nonceOverride } : {};
+  const tx = await contract.publish(
+    payload.siteId,
+    payload.timestamp,
+    payload.wattHours,
+    payload.batterySocBps,
+    overrides
+  );
   const receipt = await tx.wait();
   console.log(
     JSON.stringify({
@@ -145,22 +158,31 @@ async function publishOnceLegacy(): Promise<void> {
   );
 }
 
+// Ensure only one publish cycle runs at a time (avoids "existing transaction had higher priority" when interval < confirmation time).
+let publishLock: Promise<void> = Promise.resolve();
+
 async function publishOnce(): Promise<void> {
   const rwas = await fetchRwas();
   if (rwas.length > 0) {
+    let nonce = await provider.getTransactionCount(wallet.address, "pending");
     for (const r of rwas) {
       const latestKwh = r.latest_kwh ?? 0;
-      await publishOnceRwa(r.rwa_adi_id, latestKwh);
+      nonce = await publishOnceRwa(r.rwa_adi_id, latestKwh, nonce);
     }
     return;
   }
-  await publishOnceLegacy();
+  const nonce = await provider.getTransactionCount(wallet.address, "pending");
+  await publishOnceLegacy(nonce);
 }
 
 async function loop(): Promise<never> {
   let backoff = 1000;
   const maxBackoff = 60_000;
   while (true) {
+    const prev = publishLock;
+    let resolveLock!: () => void;
+    publishLock = new Promise((r) => { resolveLock = r; });
+    await prev;
     try {
       await publishOnce();
       backoff = 1000;
@@ -168,7 +190,8 @@ async function loop(): Promise<never> {
       console.error(JSON.stringify({ event: "error", error: String(err) }));
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, maxBackoff);
-      continue;
+    } finally {
+      resolveLock();
     }
     await new Promise((r) => setTimeout(r, PUBLISH_INTERVAL_MS));
   }

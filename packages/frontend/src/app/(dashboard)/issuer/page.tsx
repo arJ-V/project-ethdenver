@@ -318,6 +318,7 @@ export default function IssuerPortal() {
                 <TableRow className="border-muted/10">
                   <TableHead className="text-[10px] font-headline uppercase tracking-widest">RWA ID</TableHead>
                   <TableHead className="text-[10px] font-headline uppercase tracking-widest">Status</TableHead>
+                  <TableHead className="text-[10px] font-headline uppercase tracking-widest">Price</TableHead>
                   <TableHead className="text-[10px] font-headline uppercase tracking-widest">ADI Asset ID</TableHead>
                   <TableHead className="text-[10px] font-headline uppercase tracking-widest">ADI Mint Tx</TableHead>
                   <TableHead className="text-[10px] font-headline uppercase tracking-widest">ADI Lock Tx</TableHead>
@@ -334,6 +335,9 @@ export default function IssuerPortal() {
                       <Badge variant={r.bootstrap_status === "locked" ? "default" : r.bootstrap_status === "failed" ? "destructive" : "outline"} className="text-[10px]">
                         {r.bootstrap_status ?? "created"}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="text-[10px] font-mono">
+                      {r.latest_price_cents != null ? `$${(r.latest_price_cents / 100).toFixed(2)}` : "—"}
                     </TableCell>
                     <TableCell className="text-[10px] font-mono">{r.asset_id ?? "—"}</TableCell>
                     <TableCell className="text-[10px] font-mono text-muted-foreground" title={r.mint_tx_hash ?? undefined}>
