@@ -29,6 +29,31 @@ def _get(url: str) -> Optional[list[dict[str, Any]]]:
         return None
 
 
+def _get_json(url: str) -> Optional[dict[str, Any]]:
+    """GET JSON; returns dict or None on error."""
+    if not BASE_URL:
+        return None
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.get(url)
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def fetch_price(site_id: int = SITE_ID) -> Optional[dict[str, Any]]:
+    """
+    Fetch current RWA asset price from SolarTick backend.
+    GET /api/price?site_id= → { "site_id", "asset_price_cents" } (cents integer, or null).
+    """
+    if not BASE_URL:
+        return None
+    url = f"{BASE_URL}/api/price?site_id={site_id}"
+    return _get_json(url)
+
+
 def fetch_history(
     site_id: int = SITE_ID,
     from_ts: Optional[datetime] = None,
@@ -110,7 +135,19 @@ def get_telemetry_context(
         f"Site ID: {site_id} | Last {hours}h: {len(points)} points.",
         f"Latest reading ({latest_ts}): watt_hours={latest_wh:,}, battery_soc={soc_pct}.",
         f"Period average: watt_hours={avg_wh:,.0f}, battery_soc={avg_soc_pct}.",
-        "Use this data when discussing yield trends, covered calls, or current grid performance.",
-        "---",
     ]
+
+    # Current RWA asset price (cents) for analysis
+    price_data = fetch_price(site_id=site_id)
+    if price_data is not None and price_data.get("asset_price_cents") is not None:
+        cents = int(price_data["asset_price_cents"])
+        dollars = cents / 100.0
+        lines.append(f"Current RWA asset price (site {site_id}): {cents} cents (${dollars:.2f}).")
+    else:
+        lines.append(f"Current RWA asset price (site {site_id}): not available.")
+
+    lines.extend([
+        "Use this data when discussing yield trends, covered calls, current grid performance, or pricing.",
+        "---",
+    ])
     return "\n".join(lines)

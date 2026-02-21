@@ -46,7 +46,7 @@ async def stream_events(site_id: int, send_last: bool) -> AsyncGenerator[str, No
             pool = await get_pool()
             row = await pool.fetchrow(
                 """
-                SELECT site_id, ts, watt_hours, battery_soc, tx_hash, block_number, log_index
+                SELECT site_id, ts, watt_hours, battery_soc, tx_hash, block_number, log_index, asset_price_cents
                 FROM telemetry_points WHERE site_id = $1 ORDER BY ts DESC LIMIT 1
                 """,
                 site_id,
@@ -60,6 +60,7 @@ async def stream_events(site_id: int, send_last: bool) -> AsyncGenerator[str, No
                     "tx_hash": row["tx_hash"],
                     "block_number": row["block_number"],
                     "log_index": row["log_index"],
+                    "asset_price_cents": int(row["asset_price_cents"]) if row.get("asset_price_cents") is not None else None,
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
         while True:
