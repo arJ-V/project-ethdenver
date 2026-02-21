@@ -16,3 +16,4 @@ venv/
 packages/relayer-python/.relayer_state.json
 packages/trading-api/data/*.json
 docs/deployed-addresses.json
+.DS_Store

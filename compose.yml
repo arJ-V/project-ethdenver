@@ -1,4 +1,4 @@
-# Full stack: solartick (db, backend, web, publisher) + relayer.
+# Full stack: solartick (db, backend, web, publisher) + relayer + ai-copilot + frontend.
 # From repo root: docker compose up --build
 # Solartick-only (no relayer): cd solartick && docker compose up
 
@@ -75,6 +75,34 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  ai-copilot:
+    build:
+      context: ./packages/ai-copilot
+      dockerfile: Dockerfile
+    env_file:
+      - ./packages/ai-copilot/.env
+    environment:
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      SOLARTICK_API_BASE_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+
+  frontend:
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SOLARTICK_API_URL: http://localhost:8000
+        NEXT_PUBLIC_COPILOT_API_URL: http://localhost:8003
+    depends_on:
+      - backend
+      - ai-copilot
+    ports:
+      - "3000:3000"
 
 volumes:
   solartick_pgdata:
