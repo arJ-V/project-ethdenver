@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Dict, Set, Tuple
 
+import requests
 from web3 import Web3
 
 from .config import load_config
@@ -117,9 +118,53 @@ def push_oracle_update(
     return tx_hash
 
 
-def ingest_telemetry_and_compute_index() -> int:
+def _mock_yield_index() -> int:
     # Deterministic mock index for MVP while telemetry service is integrated in parallel.
     return int(time.time()) % 1000 + 100
+
+
+def _quicknode_yield_index(config) -> int:
+    if not config.telemetry_webhook_url:
+        raise RuntimeError("QUICKNODE_TELEMETRY_WEBHOOK_URL is required when TELEMETRY_SOURCE=quicknode")
+    response = requests.get(config.telemetry_webhook_url, timeout=config.telemetry_timeout_seconds)
+    response.raise_for_status()
+    payload = response.json()
+    # Accept multiple teammate payload styles while keeping a stable adapter output.
+    candidate = (
+        payload.get("yieldIndex")
+        or payload.get("yield_index")
+        or (payload.get("data") or {}).get("yieldIndex")
+        or (payload.get("data") or {}).get("yield_index")
+    )
+    if candidate is None:
+        raise RuntimeError("QuickNode payload missing yieldIndex/yield_index")
+    return int(candidate)
+
+
+def ingest_telemetry_and_compute_index(config) -> int:
+    source = (config.telemetry_source or "mock").lower()
+    if source == "quicknode":
+        return _quicknode_yield_index(config)
+    return _mock_yield_index()
+
+
+def _with_retry(action_name: str, fn, max_retries: int, backoff_seconds: int):
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_error = exc
+            logging.warning(
+                "ACTION_RETRY action=%s attempt=%s/%s error=%s",
+                action_name,
+                attempt,
+                max_retries,
+                exc,
+            )
+            if attempt < max_retries:
+                time.sleep(backoff_seconds * attempt)
+    raise RuntimeError(f"{action_name} failed after retries: {last_error}")
 
 
 def _load_accounts(config) -> Tuple[object, object]:
@@ -158,11 +203,36 @@ def main() -> None:
     else:
         from_block = adi_web3.eth.block_number
 
-    logging.info("Service started from_block=%s operator=%s", from_block, operator_account.address)
+    heartbeat = {
+        "last_loop_ts": None,
+        "last_telemetry_source": None,
+        "last_telemetry_index": None,
+        "last_processed_event_key": None,
+    }
+
+    logging.info(
+        "Service started from_block=%s operator=%s telemetry_source=%s",
+        from_block,
+        operator_account.address,
+        config.telemetry_source,
+    )
 
     while True:
-        latest_index = ingest_telemetry_and_compute_index()
-        logging.info("TELEMETRY yield_index=%s", latest_index)
+        try:
+            latest_index = ingest_telemetry_and_compute_index(config)
+            heartbeat["last_telemetry_source"] = (config.telemetry_source or "mock").lower()
+            heartbeat["last_telemetry_index"] = latest_index
+            logging.info(
+                "TELEMETRY source=%s yield_index=%s",
+                heartbeat["last_telemetry_source"],
+                latest_index,
+            )
+        except Exception as exc:
+            logging.error("TELEMETRY_FAILED source=%s error=%s", config.telemetry_source, exc)
+            latest_index = _mock_yield_index()
+            heartbeat["last_telemetry_source"] = "mock_fallback"
+            heartbeat["last_telemetry_index"] = latest_index
+            logging.info("TELEMETRY fallback=mock yield_index=%s", latest_index)
 
         try:
             to_block = adi_web3.eth.block_number
@@ -176,7 +246,8 @@ def main() -> None:
             continue
 
         for log in logs:
-            event_key = f"{log['blockNumber']}:{log['transactionHash'].hex()}:{log['logIndex']}"
+            chain_id = adi_web3.eth.chain_id
+            event_key = f"{chain_id}:{log['transactionHash'].hex()}:{log['logIndex']}"
             if event_key in state["processed"]:
                 continue
 
@@ -194,18 +265,28 @@ def main() -> None:
             )
 
             try:
-                mint_ysolar_on_hedera(
-                    hedera_web3,
-                    operator_account,
-                    config.hedera_ysolar_address,
-                    beneficiary,
-                    expected_yield_kwh,
+                _with_retry(
+                    "mint_ysolar_on_hedera",
+                    lambda: mint_ysolar_on_hedera(
+                        hedera_web3,
+                        operator_account,
+                        config.hedera_ysolar_address,
+                        beneficiary,
+                        expected_yield_kwh,
+                    ),
+                    max_retries=max(1, config.action_max_retries),
+                    backoff_seconds=max(1, config.action_retry_backoff_seconds),
                 )
-                push_oracle_update(
-                    hedera_web3,
-                    oracle_account,
-                    config.oracle_contract_address,
-                    latest_index,
+                _with_retry(
+                    "push_oracle_update",
+                    lambda: push_oracle_update(
+                        hedera_web3,
+                        oracle_account,
+                        config.oracle_contract_address,
+                        latest_index,
+                    ),
+                    max_retries=max(1, config.action_max_retries),
+                    backoff_seconds=max(1, config.action_retry_backoff_seconds),
                 )
             except Exception as exc:
                 logging.error("Failed processing event key=%s error=%s", event_key, exc)
@@ -213,8 +294,16 @@ def main() -> None:
 
             state["processed"].add(event_key)
             _save_state(state_path, state)
+            heartbeat["last_processed_event_key"] = event_key
 
         from_block = to_block + 1
+        heartbeat["last_loop_ts"] = int(time.time())
+        logging.info(
+            "HEARTBEAT last_loop_ts=%s processed_count=%s last_event=%s",
+            heartbeat["last_loop_ts"],
+            len(state["processed"]),
+            heartbeat["last_processed_event_key"],
+        )
         time.sleep(4)
 
 

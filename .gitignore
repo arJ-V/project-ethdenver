@@ -14,4 +14,5 @@ __pycache__
 venv/
 **/gasReporterOutput.json
 packages/relayer-python/.relayer_state.json
+packages/trading-api/data/*.json
 docs/deployed-addresses.json

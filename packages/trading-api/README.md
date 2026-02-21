@@ -1,6 +1,10 @@
 # trading-api
 
-HTTP API for order submission used by the **ai-copilot**. Exposes **POST /write-option** that calls `HederaOptionsDesk.writeOption(buyer, amount, strike, expiry)` on Hedera testnet using a configured writer wallet.
+Backend-for-frontend/API gateway for L2/L3 trading:
+
+- command endpoint for covered-call writes
+- read endpoints for option snapshots + lifecycle timeline
+- lightweight indexer for ADI + Hedera events
 
 ## Quick start
 
@@ -8,46 +12,66 @@ HTTP API for order submission used by the **ai-copilot**. Exposes **POST /write-
 cd packages/trading-api
 npm install
 cp .env.example .env
-# Edit .env: set WRITER_PRIVATE_KEY and optionally HEDERA_RPC_URL, HEDERA_OPTIONS_DESK_ADDRESS
+# Set WRITER_PRIVATE_KEY and optionally TRADING_API_KEY
 npm start
 ```
 
-- Listens on **http://localhost:3001** by default.
-- Desk address is read from `docs/deployed-addresses.json` (key `hedera.optionsDeskAddress`) unless `HEDERA_OPTIONS_DESK_ADDRESS` is set in env.
-
 ## Endpoints
 
-- **GET /health** — `{ "status": "ok", "service": "trading-api" }`
-- **POST /write-option** — Submit a covered-call order.
+- `GET /health`
+- `POST /write-option` (command path; optional API key)
+- `GET /orders/:optionId` (on-chain snapshot + normalized timeline)
+- `GET /orders?writer=&buyer=&status=`
+- `GET /timeline/:optionId`
+- `POST /admin/reindex` (optional API key)
 
-### POST /write-option
+## Auth placeholder
 
-**Body (JSON):**
+If `TRADING_API_KEY` is set, send:
 
-| Field   | Type   | Required | Description                          |
-|--------|--------|----------|--------------------------------------|
-| buyer  | string | Yes      | Beneficiary address (hex)            |
-| amount | number/string | Yes | ySOLAR notional (collateral locked)  |
-| strike | number/string | Yes | Yield index threshold                |
-| expiry | number/string | Yes | Unix timestamp (must be ≥ now + 120) |
+`x-api-key: <TRADING_API_KEY>`
 
-**Response (2xx):** `{ "txHash": "...", "optionId": "..." }`  
-**Errors:** 400 (validation), 502 (contract/revert), 503 (missing config).
+Required for:
+- `POST /write-option`
+- `POST /admin/reindex`
 
-The **writer** is the wallet derived from `WRITER_PRIVATE_KEY`; that account must hold enough ySOLAR and have approved the options desk.
+## Response envelopes
+
+Success:
+
+```json
+{ "ok": true }
+```
+
+Error:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Human readable explanation",
+    "details": {}
+  }
+}
+```
 
 ## Env
 
-| Variable | Description |
-|----------|-------------|
-| `HEDERA_RPC_URL` | Hedera testnet RPC (default: https://testnet.hashio.io/api) |
-| `WRITER_PRIVATE_KEY` or `HEDERA_OPERATOR_KEY` | Writer wallet private key (hex) |
-| `HEDERA_OPTIONS_DESK_ADDRESS` | Options desk contract address (optional if `docs/deployed-addresses.json` exists) |
-| `PORT` | Server port (default: 3001) |
+See `.env.example` for complete values. Key variables:
 
-## Integration with ai-copilot
+- `HEDERA_RPC_URL`
+- `ADI_RPC_URL`
+- `HEDERA_MIRROR_BASE_URL`
+- `WRITER_PRIVATE_KEY` or `HEDERA_OPERATOR_KEY`
+- `HEDERA_OPTIONS_DESK_ADDRESS` (optional if manifest exists)
+- `ADI_VAULT_ADDRESS` (optional if manifest exists)
+- `TRADING_API_KEY` (optional)
+- `READ_MODEL_FILE`
+- `INDEXER_POLL_MS`
+- `PORT`
 
-1. Start this service (e.g. `npm start` in `packages/trading-api`).
-2. In `packages/ai-copilot`, set `.env`:  
-   `HEDERA_API_BASE_URL=http://localhost:3001` and `HEDERA_MOCK=false`.
-3. Agent flow: **POST /chat** (mode=trade) → extract intent → **POST /intents** (save intent) → **POST /intents/{id}/submit** (calls this API and returns `tx_hash`, `option_id`).
+## Integration contract docs
+
+- `docs/trading-api-contract.md`
+- `docs/frontend-integration-spec.md`
