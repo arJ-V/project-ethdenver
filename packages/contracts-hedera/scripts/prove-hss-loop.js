@@ -34,6 +34,8 @@ function selectorToReason(selector) {
     "0xa3a6fd7e": "InvalidExpiry",
     "0xc11bf4e3": "InvalidStatus",
     "0x3d693ada": "UnauthorizedSettler",
+    // Keep both selectors to support logs from older and newer deployments.
+    "0x29be7398": "OptionNotExpired",
     "0x7894efdb": "OptionNotExpired",
     "0x90b8ec18": "TransferFailed",
     "0x73a3f9d9": "OracleNotInitialized",
