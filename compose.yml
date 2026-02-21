@@ -23,6 +23,7 @@ services:
       dockerfile: Dockerfile
     env_file:
       - ./solartick/.env
+      - ./packages/relayer-python/.env
     environment:
       # Override so backend reaches Postgres via Docker network hostname
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/solartick
@@ -91,6 +92,19 @@ services:
     ports:
       - "8003:8003"
 
+  trading-api:
+    build:
+      context: ./packages/trading-api
+      dockerfile: Dockerfile
+    env_file:
+      - ./.env
+      - ./packages/relayer-python/.env
+      - ./packages/trading-api/.env
+    environment:
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+
   frontend:
     build:
       context: ./packages/frontend
@@ -98,6 +112,7 @@ services:
       args:
         NEXT_PUBLIC_SOLARTICK_API_URL: http://localhost:8000
         NEXT_PUBLIC_COPILOT_API_URL: http://localhost:8003
+        NEXT_PUBLIC_TRADING_API_URL: http://localhost:3001
     depends_on:
       - backend
       - ai-copilot

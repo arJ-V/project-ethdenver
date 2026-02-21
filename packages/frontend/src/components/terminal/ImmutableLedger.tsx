@@ -27,6 +27,7 @@ function entryToDisplay(e: RwaFeedEntry) {
 
 export function ImmutableLedger() {
   const [entries, setEntries] = useState<ReturnType<typeof entryToDisplay>[]>([])
+  const [scrollPaused, setScrollPaused] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -52,7 +53,11 @@ export function ImmutableLedger() {
           Immutable Stream
         </span>
       </div>
-      <div className="flex-1 overflow-hidden relative flex items-center">
+      <div
+        className={`flex-1 overflow-hidden relative flex items-center ${scrollPaused ? "ledger-paused" : ""}`}
+        onMouseEnter={() => setScrollPaused(true)}
+        onMouseLeave={() => setScrollPaused(false)}
+      >
         {scrollContent.length === 0 ? (
           <span className="text-[10px] text-muted-foreground px-8">No oracle updates yet (from <code>rwa_oracle_updates</code>)</span>
         ) : (

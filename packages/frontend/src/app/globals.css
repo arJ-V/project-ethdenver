@@ -62,3 +62,7 @@
 .animate-ledger-scroll {
   animation: scroll 40s linear infinite;
 }
+
+.ledger-paused .animate-ledger-scroll {
+  animation-play-state: paused;
+}

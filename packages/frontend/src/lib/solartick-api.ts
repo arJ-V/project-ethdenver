@@ -33,8 +33,15 @@ export type RwaListItem = {
   latest_ts: string | null;
   asset_id?: number | null;
   bootstrap_status?: string | null;
+  mint_tx_hash?: string | null;
   lock_tx_hash?: string | null;
+  hedera_mint_tx_hash?: string | null;
+  hedera_mint_status?: string | null;
   beneficiary_address?: string | null;
+};
+
+export type PublicConfig = {
+  adi_vault_address: string | null;
 };
 
 export type RwaFeedEntry = {
@@ -48,12 +55,75 @@ export type RwaFeedEntry = {
   source: string;
 };
 
-/** Create RWA. Returns rwa_adi_id (use as site_id on chain). */
-export async function createRwa(kwh: number): Promise<{ rwa_adi_id: number }> {
+/** Public config (e.g. ADI Vault address for display). */
+export async function getConfig(): Promise<PublicConfig> {
+  const r = await fetch(buildUrl("/api/config"));
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+/** Create RWA. When bootstrap !== false (default), runs ADI mint+lock and returns asset_id + tx hashes. */
+export async function createRwa(
+  kwh: number,
+  options?: { bootstrap?: boolean; beneficiary?: string }
+): Promise<{
+  rwa_adi_id: number;
+  asset_id?: number;
+  beneficiary?: string;
+  mint_tx_hash?: string;
+  lock_tx_hash?: string;
+  status?: string;
+}> {
+  const bootstrap = options?.bootstrap !== false;
+  const body: { kwh: number; bootstrap?: boolean; beneficiary?: string } = { kwh };
+  if (bootstrap) body.bootstrap = true;
+  if (options?.beneficiary) body.beneficiary = options.beneficiary;
   const r = await fetch(buildUrl("/api/rwa"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kwh }),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+/** Create RWA and bootstrap on ADI (mint + lock). Returns rwa_adi_id, asset_id, tx hashes. */
+export async function bootstrapRwa(
+  kwh: number,
+  beneficiary?: string
+): Promise<{
+  rwa_adi_id: number;
+  asset_id?: number;
+  beneficiary: string;
+  mint_tx_hash: string;
+  lock_tx_hash: string;
+  status: string;
+}> {
+  const r = await fetch(buildUrl("/api/rwa/bootstrap"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kwh, beneficiary: beneficiary || undefined }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+/** Bootstrap an existing RWA (status=created) on ADI so ADI/Hedera fields populate. */
+export async function bootstrapRwaById(
+  rwaId: number,
+  beneficiary?: string
+): Promise<{
+  rwa_adi_id: number;
+  asset_id?: number;
+  beneficiary: string;
+  mint_tx_hash: string;
+  lock_tx_hash: string;
+  status: string;
+}> {
+  const r = await fetch(buildUrl(`/api/rwa/${rwaId}/bootstrap`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(beneficiary != null ? { beneficiary } : {}),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();

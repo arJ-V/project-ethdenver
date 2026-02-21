@@ -42,6 +42,12 @@ class AdiBootstrapResult:
     mint_tx_hash: str
 
 
+def operator_address_from_key(private_key: str) -> str:
+    """Derive the operator (account) address from the ADI operator private key."""
+    account = Web3().eth.account.from_key(private_key)
+    return account.address
+
+
 def bootstrap_rwa_on_adi(
     *,
     adi_rpc_url: str,
@@ -86,10 +92,12 @@ def bootstrap_rwa_on_adi(
         raise RuntimeError("Unable to parse AssetMinted event from mintAsset receipt")
     asset_id = int(minted_events[0]["args"]["assetId"])
 
+    # Use fresh nonce for lock tx after mint confirmed (avoids nonce reuse if chain state changed)
+    lock_nonce = web3.eth.get_transaction_count(account.address, "pending")
     lock_tx = contract.functions.lockAsset(asset_id, int(expected_yield_kwh), Web3.to_checksum_address(beneficiary)).build_transaction(
         {
             "from": account.address,
-            "nonce": nonce + 1,
+            "nonce": lock_nonce,
             "gas": 800_000,
             "gasPrice": web3.eth.gas_price,
             "chainId": chain_id,

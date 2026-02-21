@@ -1,7 +1,7 @@
 
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -57,27 +57,24 @@ export function AssetDiscovery({ selectedId, onSelect }: AssetDiscoveryProps) {
   const [loading, setLoading] = useState(true)
   const [dataSource, setDataSource] = useState<"live" | "offline" | "checking">("checking")
 
-  useEffect(() => {
-    let cancelled = false
+  const refresh = useCallback(() => {
     Promise.all([checkBackendHealth(), fetchRwaAssets()])
       .then(([health, list]) => {
-        if (cancelled) return
         setRwaAssets(health.ok ? list : [])
         setDataSource(health.ok ? "live" : "offline")
       })
       .catch(() => {
-        if (!cancelled) {
-          setRwaAssets([])
-          setDataSource("offline")
-        }
+        setRwaAssets([])
+        setDataSource("offline")
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
+      .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    refresh()
+    const interval = setInterval(refresh, 5_000)
+    return () => clearInterval(interval)
+  }, [refresh])
 
   // When live data loads and current selection isn't in the list, select first RWA
   useEffect(() => {

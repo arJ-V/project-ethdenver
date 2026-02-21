@@ -89,6 +89,12 @@ async def init_db(pool: asyncpg.Pool) -> None:
         ALTER TABLE rwas ADD COLUMN IF NOT EXISTS bootstrap_status TEXT NULL;
     """)
     await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS hedera_mint_tx_hash TEXT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS hedera_mint_status TEXT NULL;
+    """)
+    await pool.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_rwas_adi_asset_id
         ON rwas (adi_asset_id) WHERE adi_asset_id IS NOT NULL;
     """)

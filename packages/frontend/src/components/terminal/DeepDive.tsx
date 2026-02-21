@@ -58,6 +58,8 @@ export function DeepDive({ asset }: DeepDiveProps) {
 
   useEffect(() => {
     fetchRwa()
+    const interval = setInterval(fetchRwa, 5_000)
+    return () => clearInterval(interval)
   }, [fetchRwa])
 
   if (!asset) {
@@ -188,8 +190,8 @@ export function DeepDive({ asset }: DeepDiveProps) {
       <div className="grid grid-cols-3 gap-4">
         {[
           { label: "Latest KWH", value: rwaLatest != null ? `${(rwaLatest.kwh / 1000).toFixed(1)} KWH` : "—", sub: "rwa_timeseries" },
-          { label: "Price (cents)", value: rwaLatest != null ? String(rwaLatest.price_cents) : "—", sub: "From DB" },
-          { label: "Data source", value: "Postgres", sub: "SolarTick backend" },
+          { label: "Price (cents)", value: rwaLatest != null ? String(rwaLatest.price_cents) : "—", sub: "Streamed" },
+          { label: "Data source", value: "QuickNode & PG", sub: "SolarTick backend" },
         ].map((stat, i) => (
           <Card key={i} className="bg-sidebar/30 border-none p-4">
             <p className="text-[10px] text-muted-foreground uppercase font-headline font-bold tracking-widest">{stat.label}</p>

@@ -2,12 +2,12 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Body, Query, status
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from adi import bootstrap_rwa_on_adi
+from adi import bootstrap_rwa_on_adi, operator_address_from_key
 from db import get_pool
 from live import stream_events
 from pricing import _establishment_price_cents
@@ -23,8 +23,16 @@ from settings import (
 router = APIRouter(prefix="/api", tags=["api"])
 
 
+@router.get("/config")
+async def get_config() -> dict:
+    """Public config for frontend (e.g. ADI Vault address for display)."""
+    return {"adi_vault_address": ADI_VAULT_ADDRESS}
+
+
 class CreateRWAInput(BaseModel):
     kwh: int
+    bootstrap: Optional[bool] = True  # when True, run ADI mint+lock after insert
+    beneficiary: Optional[str] = None  # used when bootstrap is True
 
 
 class BootstrapRWAInput(BaseModel):
@@ -32,11 +40,41 @@ class BootstrapRWAInput(BaseModel):
     beneficiary: Optional[str] = None
 
 
+async def _rwa_creation_in_progress(pool, exclude_rwa_id: Optional[int] = None) -> bool:
+    """True if any RWA (other than exclude_rwa_id) is created-but-not-locked or locked-but-hedera-mint-pending."""
+    if exclude_rwa_id is not None:
+        row = await pool.fetchrow(
+            """
+            SELECT 1 FROM rwas
+            WHERE id != $1
+              AND (bootstrap_status = 'created'
+                   OR (bootstrap_status = 'locked' AND (hedera_mint_status IS NULL OR hedera_mint_status = 'pending')))
+            LIMIT 1
+            """,
+            exclude_rwa_id,
+        )
+    else:
+        row = await pool.fetchrow(
+            """
+            SELECT 1 FROM rwas
+            WHERE bootstrap_status = 'created'
+               OR (bootstrap_status = 'locked' AND (hedera_mint_status IS NULL OR hedera_mint_status = 'pending'))
+            LIMIT 1
+            """
+        )
+    return row is not None
+
+
 async def _insert_rwa_row(kwh: int) -> dict:
     if kwh <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="kwh must be positive")
-    starting_price_cents = _establishment_price_cents(kwh, RWA_TOKEN_AMOUNT_MINTED)
     pool = await get_pool()
+    if await _rwa_creation_in_progress(pool):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another RWA is currently in creation (Postgres created, ADI bootstrap, or Hedera mint). Finish or wait before creating a new one.",
+        )
+    starting_price_cents = _establishment_price_cents(kwh, RWA_TOKEN_AMOUNT_MINTED)
     row = await pool.fetchrow(
         """
         INSERT INTO rwas (starting_kwh, starting_price_cents, bootstrap_status)
@@ -69,11 +107,75 @@ async def _insert_rwa_row(kwh: int) -> dict:
 @router.post("/rwa", status_code=status.HTTP_201_CREATED)
 async def create_rwa(body: CreateRWAInput) -> dict:
     """
-    Create an RWA. Input: starting KWH. Output: RWA ADI ID.
-    Creates the initial time-series row (starting KWH, computed starting price in cents).
+    Create an RWA. Input: starting KWH; optional bootstrap (default True) runs ADI mint+lock.
+    When bootstrap=True, returns asset_id and tx hashes; when False, returns only rwa_adi_id.
     """
     created = await _insert_rwa_row(body.kwh)
-    return {"rwa_adi_id": created["rwa_adi_id"]}
+    rwa_id = int(created["rwa_adi_id"])
+
+    if body.bootstrap is False:
+        return {"rwa_adi_id": rwa_id}
+
+    # Bootstrap on ADI (same flow as POST /rwa/bootstrap)
+    beneficiary = body.beneficiary or RWA_DEFAULT_BENEFICIARY
+    if not ADI_RPC_URL or not ADI_VAULT_ADDRESS or not ADI_OPERATOR_PRIVATE_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ADI not configured (ADI_RPC_URL, ADI_VAULT_ADDRESS, ADI_OPERATOR_PRIVATE_KEY required for bootstrap)",
+        )
+    # Fallback: when no beneficiary is set, use the operator address (e.g. for local/demo)
+    if not beneficiary:
+        beneficiary = operator_address_from_key(ADI_OPERATOR_PRIVATE_KEY)
+
+    try:
+        adi_result = await asyncio.to_thread(
+            bootstrap_rwa_on_adi,
+            adi_rpc_url=ADI_RPC_URL,
+            vault_address=ADI_VAULT_ADDRESS,
+            operator_private_key=ADI_OPERATOR_PRIVATE_KEY,
+            beneficiary=beneficiary,
+            expected_yield_kwh=body.kwh,
+        )
+    except Exception as exc:
+        pool = await get_pool()
+        await pool.execute(
+            "UPDATE rwas SET bootstrap_status = $2, beneficiary_address = $3 WHERE id = $1",
+            rwa_id,
+            "failed",
+            beneficiary,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"ADI bootstrap failed: {exc}") from exc
+
+    pool = await get_pool()
+    await pool.execute(
+        """
+        UPDATE rwas
+        SET adi_asset_id = $2,
+            adi_owner_address = $3,
+            beneficiary_address = $4,
+            mint_tx_hash = $5,
+            lock_tx_hash = $6,
+            bootstrap_status = $7,
+            hedera_mint_status = $8
+        WHERE id = $1
+        """,
+        rwa_id,
+        adi_result.asset_id,
+        adi_result.owner,
+        beneficiary,
+        adi_result.mint_tx_hash,
+        adi_result.lock_tx_hash,
+        "locked",
+        "pending",
+    )
+    return {
+        "rwa_adi_id": rwa_id,
+        "asset_id": adi_result.asset_id,
+        "beneficiary": beneficiary,
+        "mint_tx_hash": adi_result.mint_tx_hash,
+        "lock_tx_hash": adi_result.lock_tx_hash,
+        "status": "locked",
+    }
 
 
 @router.post("/rwa/bootstrap", status_code=status.HTTP_201_CREATED)
@@ -83,16 +185,13 @@ async def bootstrap_rwa(body: BootstrapRWAInput) -> dict:
     This emits YieldMintRequested, which the relayer consumes to mint ySOLAR.
     """
     beneficiary = body.beneficiary or RWA_DEFAULT_BENEFICIARY
-    if not beneficiary:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Missing beneficiary (set RWA_DEFAULT_BENEFICIARY or provide beneficiary in request body)",
-        )
     if not ADI_RPC_URL or not ADI_VAULT_ADDRESS or not ADI_OPERATOR_PRIVATE_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Missing ADI config (ADI_RPC_URL, ADI_VAULT_ADDRESS, ADI_OPERATOR_PRIVATE_KEY)",
         )
+    if not beneficiary:
+        beneficiary = operator_address_from_key(ADI_OPERATOR_PRIVATE_KEY)
     created = await _insert_rwa_row(body.kwh)
     rwa_id = int(created["rwa_adi_id"])
 
@@ -124,7 +223,8 @@ async def bootstrap_rwa(body: BootstrapRWAInput) -> dict:
             beneficiary_address = $4,
             mint_tx_hash = $5,
             lock_tx_hash = $6,
-            bootstrap_status = $7
+            bootstrap_status = $7,
+            hedera_mint_status = $8
         WHERE id = $1
         """,
         rwa_id,
@@ -134,6 +234,88 @@ async def bootstrap_rwa(body: BootstrapRWAInput) -> dict:
         adi_result.mint_tx_hash,
         adi_result.lock_tx_hash,
         "locked",
+        "pending",
+    )
+    return {
+        "rwa_adi_id": rwa_id,
+        "asset_id": adi_result.asset_id,
+        "beneficiary": beneficiary,
+        "mint_tx_hash": adi_result.mint_tx_hash,
+        "lock_tx_hash": adi_result.lock_tx_hash,
+        "status": "locked",
+    }
+
+
+@router.post("/rwa/{rwa_id}/bootstrap", status_code=status.HTTP_200_OK)
+async def bootstrap_existing_rwa(rwa_id: int, body: Optional[BootstrapRWAInput] = Body(None)) -> dict:
+    """
+    Bootstrap an existing RWA (status=created) on ADI: mint+lock. Use when an RWA was created
+    with POST /rwa only and you want to run the ADI step so pipeline fields populate.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, starting_kwh, bootstrap_status FROM rwas WHERE id = $1",
+        rwa_id,
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RWA not found")
+    if str(row["bootstrap_status"]) != "created":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"RWA {rwa_id} has bootstrap_status={row['bootstrap_status']}; only RWAs with status 'created' can be bootstrapped",
+        )
+    if await _rwa_creation_in_progress(pool, exclude_rwa_id=rwa_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another RWA is currently in creation. Wait for it to finish before bootstrapping.",
+        )
+    beneficiary = (body and body.beneficiary) or RWA_DEFAULT_BENEFICIARY
+    if not ADI_RPC_URL or not ADI_VAULT_ADDRESS or not ADI_OPERATOR_PRIVATE_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Missing ADI config (ADI_RPC_URL, ADI_VAULT_ADDRESS, ADI_OPERATOR_PRIVATE_KEY)",
+        )
+    if not beneficiary:
+        beneficiary = operator_address_from_key(ADI_OPERATOR_PRIVATE_KEY)
+    kwh = int(row["starting_kwh"])
+    try:
+        adi_result = await asyncio.to_thread(
+            bootstrap_rwa_on_adi,
+            adi_rpc_url=ADI_RPC_URL,
+            vault_address=ADI_VAULT_ADDRESS,
+            operator_private_key=ADI_OPERATOR_PRIVATE_KEY,
+            beneficiary=beneficiary,
+            expected_yield_kwh=kwh,
+        )
+    except Exception as exc:
+        await pool.execute(
+            "UPDATE rwas SET bootstrap_status = $2, beneficiary_address = $3 WHERE id = $1",
+            rwa_id,
+            "failed",
+            beneficiary,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"ADI bootstrap failed: {exc}") from exc
+
+    await pool.execute(
+        """
+        UPDATE rwas
+        SET adi_asset_id = $2,
+            adi_owner_address = $3,
+            beneficiary_address = $4,
+            mint_tx_hash = $5,
+            lock_tx_hash = $6,
+            bootstrap_status = $7,
+            hedera_mint_status = $8
+        WHERE id = $1
+        """,
+        rwa_id,
+        adi_result.asset_id,
+        adi_result.owner,
+        beneficiary,
+        adi_result.mint_tx_hash,
+        adi_result.lock_tx_hash,
+        "locked",
+        "pending",
     )
     return {
         "rwa_adi_id": rwa_id,
@@ -214,7 +396,10 @@ async def list_rwas() -> list:
         SELECT r.id AS rwa_id,
                r.adi_asset_id,
                r.bootstrap_status,
+               r.mint_tx_hash,
                r.lock_tx_hash,
+               r.hedera_mint_tx_hash,
+               r.hedera_mint_status,
                r.beneficiary_address,
                (SELECT kwh FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_kwh,
                (SELECT ts FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_ts
@@ -229,7 +414,10 @@ async def list_rwas() -> list:
             "latest_ts": r["latest_ts"].isoformat() if r["latest_ts"] and hasattr(r["latest_ts"], "isoformat") else str(r["latest_ts"]) if r["latest_ts"] else None,
             "asset_id": int(r["adi_asset_id"]) if r["adi_asset_id"] is not None else None,
             "bootstrap_status": str(r["bootstrap_status"]) if r["bootstrap_status"] is not None else None,
+            "mint_tx_hash": str(r["mint_tx_hash"]) if r["mint_tx_hash"] is not None else None,
             "lock_tx_hash": str(r["lock_tx_hash"]) if r["lock_tx_hash"] is not None else None,
+            "hedera_mint_tx_hash": str(r["hedera_mint_tx_hash"]) if r["hedera_mint_tx_hash"] is not None else None,
+            "hedera_mint_status": str(r["hedera_mint_status"]) if r["hedera_mint_status"] is not None else None,
             "beneficiary_address": str(r["beneficiary_address"]) if r["beneficiary_address"] is not None else None,
         }
         for r in rows

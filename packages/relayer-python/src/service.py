@@ -48,6 +48,22 @@ ORACLE_MINIMAL_ABI = [
 ]
 
 
+def _mark_hedera_mint_done(database_url: str, adi_asset_id: int, hedera_tx_hash: str) -> None:
+    """Update rwas so UI can show Hedera ySOLAR mint step (relayer polls ADI, mints on Hedera)."""
+    try:
+        conn = psycopg2.connect(database_url)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE rwas SET hedera_mint_tx_hash = %s, hedera_mint_status = %s WHERE adi_asset_id = %s",
+                (hedera_tx_hash, "minted", adi_asset_id),
+            )
+        conn.close()
+        logging.info("Updated rwas adi_asset_id=%s hedera_mint_tx_hash=%s", adi_asset_id, hedera_tx_hash)
+    except Exception as exc:
+        logging.warning("Failed to update rwas hedera_mint adi_asset_id=%s error=%s", adi_asset_id, exc)
+
+
 def _load_state(path: Path) -> Dict[str, Set[str]]:
     if not path.exists():
         return {"processed": set()}
@@ -339,13 +355,14 @@ def main() -> None:
             )
 
             try:
-                mint_ysolar_on_hedera(
+                tx_hash = mint_ysolar_on_hedera(
                     hedera_web3,
                     operator_account,
                     config.hedera_ysolar_address,
                     beneficiary,
                     expected_yield_kwh,
                 )
+                _mark_hedera_mint_done(config.database_url, asset_id, tx_hash)
             except Exception as exc:
                 logging.error("Failed processing event key=%s error=%s", event_key, exc)
                 continue
