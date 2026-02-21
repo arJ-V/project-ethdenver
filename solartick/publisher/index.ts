@@ -102,6 +102,7 @@ async function publishOnceRwa(rwaId: number, latestKwh: number): Promise<void> {
     batterySocBps
   );
   const receipt = await tx.wait();
+  const txHash = receipt?.hash ?? tx.hash;
   console.log(
     JSON.stringify({
       event: "published",
@@ -111,7 +112,7 @@ async function publishOnceRwa(rwaId: number, latestKwh: number): Promise<void> {
         watt_hours: Number(wattHours),
         battery_soc_bps: batterySocBps,
       },
-      tx_hash: receipt?.hash ?? tx.hash,
+      tx_hash: txHash,
     })
   );
 }

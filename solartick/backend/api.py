@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Query, status
@@ -6,10 +7,18 @@ from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from adi import bootstrap_rwa_on_adi
 from db import get_pool
 from live import stream_events
 from pricing import _establishment_price_cents
-from settings import DEMO_RESET_SECRET, RWA_TOKEN_AMOUNT_MINTED
+from settings import (
+    ADI_OPERATOR_PRIVATE_KEY,
+    ADI_RPC_URL,
+    ADI_VAULT_ADDRESS,
+    DEMO_RESET_SECRET,
+    RWA_DEFAULT_BENEFICIARY,
+    RWA_TOKEN_AMOUNT_MINTED,
+)
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -18,24 +27,25 @@ class CreateRWAInput(BaseModel):
     kwh: int
 
 
-@router.post("/rwa", status_code=status.HTTP_201_CREATED)
-async def create_rwa(body: CreateRWAInput) -> dict:
-    """
-    Create an RWA. Input: starting KWH. Output: RWA ADI ID.
-    Creates the initial time-series row (starting KWH, computed starting price in cents).
-    """
-    if body.kwh < 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="kwh must be non-negative")
-    starting_price_cents = _establishment_price_cents(body.kwh, RWA_TOKEN_AMOUNT_MINTED)
+class BootstrapRWAInput(BaseModel):
+    kwh: int
+    beneficiary: Optional[str] = None
+
+
+async def _insert_rwa_row(kwh: int) -> dict:
+    if kwh <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="kwh must be positive")
+    starting_price_cents = _establishment_price_cents(kwh, RWA_TOKEN_AMOUNT_MINTED)
     pool = await get_pool()
     row = await pool.fetchrow(
         """
-        INSERT INTO rwas (starting_kwh, starting_price_cents)
-        VALUES ($1, $2)
+        INSERT INTO rwas (starting_kwh, starting_price_cents, bootstrap_status)
+        VALUES ($1, $2, $3)
         RETURNING id, created_at, starting_kwh, starting_price_cents
         """,
-        body.kwh,
+        kwh,
         starting_price_cents,
+        "created",
     )
     rwa_id = int(row["id"])
     await pool.execute(
@@ -45,10 +55,94 @@ async def create_rwa(body: CreateRWAInput) -> dict:
         """,
         rwa_id,
         row["created_at"],
-        body.kwh,
+        kwh,
         starting_price_cents,
     )
-    return {"rwa_adi_id": rwa_id}
+    return {
+        "rwa_adi_id": rwa_id,
+        "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+        "starting_kwh": int(row["starting_kwh"]),
+        "starting_price_cents": int(row["starting_price_cents"]),
+    }
+
+
+@router.post("/rwa", status_code=status.HTTP_201_CREATED)
+async def create_rwa(body: CreateRWAInput) -> dict:
+    """
+    Create an RWA. Input: starting KWH. Output: RWA ADI ID.
+    Creates the initial time-series row (starting KWH, computed starting price in cents).
+    """
+    created = await _insert_rwa_row(body.kwh)
+    return {"rwa_adi_id": created["rwa_adi_id"]}
+
+
+@router.post("/rwa/bootstrap", status_code=status.HTTP_201_CREATED)
+async def bootstrap_rwa(body: BootstrapRWAInput) -> dict:
+    """
+    Create an RWA and immediately mint+lock its matching ADI asset.
+    This emits YieldMintRequested, which the relayer consumes to mint ySOLAR.
+    """
+    beneficiary = body.beneficiary or RWA_DEFAULT_BENEFICIARY
+    if not beneficiary:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Missing beneficiary (set RWA_DEFAULT_BENEFICIARY or provide beneficiary in request body)",
+        )
+    if not ADI_RPC_URL or not ADI_VAULT_ADDRESS or not ADI_OPERATOR_PRIVATE_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Missing ADI config (ADI_RPC_URL, ADI_VAULT_ADDRESS, ADI_OPERATOR_PRIVATE_KEY)",
+        )
+    created = await _insert_rwa_row(body.kwh)
+    rwa_id = int(created["rwa_adi_id"])
+
+    try:
+        adi_result = await asyncio.to_thread(
+            bootstrap_rwa_on_adi,
+            adi_rpc_url=ADI_RPC_URL,
+            vault_address=ADI_VAULT_ADDRESS,
+            operator_private_key=ADI_OPERATOR_PRIVATE_KEY,
+            beneficiary=beneficiary,
+            expected_yield_kwh=body.kwh,
+        )
+    except Exception as exc:
+        pool = await get_pool()
+        await pool.execute(
+            "UPDATE rwas SET bootstrap_status = $2, beneficiary_address = $3 WHERE id = $1",
+            rwa_id,
+            "failed",
+            beneficiary,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"ADI bootstrap failed: {exc}") from exc
+
+    pool = await get_pool()
+    await pool.execute(
+        """
+        UPDATE rwas
+        SET adi_asset_id = $2,
+            adi_owner_address = $3,
+            beneficiary_address = $4,
+            mint_tx_hash = $5,
+            lock_tx_hash = $6,
+            bootstrap_status = $7
+        WHERE id = $1
+        """,
+        rwa_id,
+        adi_result.asset_id,
+        adi_result.owner,
+        beneficiary,
+        adi_result.mint_tx_hash,
+        adi_result.lock_tx_hash,
+        "locked",
+    )
+    return {
+        "rwa_adi_id": rwa_id,
+        "asset_id": adi_result.asset_id,
+        "beneficiary": beneficiary,
+        "mint_tx_hash": adi_result.mint_tx_hash,
+        "lock_tx_hash": adi_result.lock_tx_hash,
+        "status": "locked",
+    }
 
 
 @router.get("/rwa/{rwa_id}/data")
@@ -118,6 +212,10 @@ async def list_rwas() -> list:
     rows = await pool.fetch(
         """
         SELECT r.id AS rwa_id,
+               r.adi_asset_id,
+               r.bootstrap_status,
+               r.lock_tx_hash,
+               r.beneficiary_address,
                (SELECT kwh FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_kwh,
                (SELECT ts FROM rwa_timeseries WHERE rwa_id = r.id ORDER BY ts DESC LIMIT 1) AS latest_ts
         FROM rwas r
@@ -129,6 +227,41 @@ async def list_rwas() -> list:
             "rwa_adi_id": int(r["rwa_id"]),
             "latest_kwh": int(r["latest_kwh"]) if r["latest_kwh"] is not None else None,
             "latest_ts": r["latest_ts"].isoformat() if r["latest_ts"] and hasattr(r["latest_ts"], "isoformat") else str(r["latest_ts"]) if r["latest_ts"] else None,
+            "asset_id": int(r["adi_asset_id"]) if r["adi_asset_id"] is not None else None,
+            "bootstrap_status": str(r["bootstrap_status"]) if r["bootstrap_status"] is not None else None,
+            "lock_tx_hash": str(r["lock_tx_hash"]) if r["lock_tx_hash"] is not None else None,
+            "beneficiary_address": str(r["beneficiary_address"]) if r["beneficiary_address"] is not None else None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/rwa/feed")
+async def rwa_feed(limit: int = Query(40, ge=1, le=300)) -> list:
+    """
+    Latest oracle/yield updates derived from RWA ingest path.
+    Intended for trader immutable stream.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT id, rwa_id, price_cents, kwh, source_tx_hash, source_log_index, created_at
+        FROM rwa_oracle_updates
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    return [
+        {
+            "id": int(r["id"]),
+            "rwa_adi_id": int(r["rwa_id"]),
+            "price_cents": int(r["price_cents"]),
+            "kwh": int(r["kwh"]),
+            "tx_hash": str(r["source_tx_hash"]) if r["source_tx_hash"] is not None else None,
+            "log_index": int(r["source_log_index"]) if r["source_log_index"] is not None else None,
+            "ts": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+            "source": "oracle",
         }
         for r in rows
     ]
@@ -230,6 +363,7 @@ async def reset(
     pool = await get_pool()
     await pool.execute("TRUNCATE TABLE telemetry_points")
     await pool.execute("TRUNCATE TABLE rwa_site_state")
+    await pool.execute("TRUNCATE TABLE rwa_oracle_updates")
     await pool.execute("TRUNCATE TABLE rwa_timeseries")
     await pool.execute("TRUNCATE TABLE rwas")
     return None

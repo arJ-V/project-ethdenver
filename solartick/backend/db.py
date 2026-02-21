@@ -61,8 +61,36 @@ async def init_db(pool: asyncpg.Pool) -> None:
             id BIGSERIAL PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             starting_kwh BIGINT NOT NULL,
-            starting_price_cents BIGINT NOT NULL
+            starting_price_cents BIGINT NOT NULL,
+            adi_asset_id BIGINT NULL,
+            adi_owner_address TEXT NULL,
+            beneficiary_address TEXT NULL,
+            mint_tx_hash TEXT NULL,
+            lock_tx_hash TEXT NULL,
+            bootstrap_status TEXT NULL
         );
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS adi_asset_id BIGINT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS adi_owner_address TEXT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS beneficiary_address TEXT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS mint_tx_hash TEXT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS lock_tx_hash TEXT NULL;
+    """)
+    await pool.execute("""
+        ALTER TABLE rwas ADD COLUMN IF NOT EXISTS bootstrap_status TEXT NULL;
+    """)
+    await pool.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rwas_adi_asset_id
+        ON rwas (adi_asset_id) WHERE adi_asset_id IS NOT NULL;
     """)
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS rwa_timeseries (
@@ -93,6 +121,21 @@ async def init_db(pool: asyncpg.Pool) -> None:
     await pool.execute("""
         CREATE INDEX IF NOT EXISTS idx_oracle_pending_created
         ON oracle_pending_updates (created_at);
+    """)
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS rwa_oracle_updates (
+            id BIGSERIAL PRIMARY KEY,
+            rwa_id BIGINT NOT NULL REFERENCES rwas(id) ON DELETE CASCADE,
+            price_cents BIGINT NOT NULL,
+            kwh BIGINT NOT NULL,
+            source_tx_hash TEXT NULL,
+            source_log_index INT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    """)
+    await pool.execute("""
+        CREATE INDEX IF NOT EXISTS idx_rwa_oracle_updates_created
+        ON rwa_oracle_updates (created_at DESC);
     """)
 
 

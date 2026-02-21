@@ -39,3 +39,31 @@ export async function fetchPriceHistory(params: {
     },
   });
 }
+
+export interface RwaDataPoint {
+  ts: string;
+  kwh: number;
+  price_cents: number;
+}
+
+export async function fetchRwaData(params: {
+  rwaId: number;
+  from: string;
+  to: string;
+  limit?: number;
+}) {
+  return requestJson<RwaDataPoint[]>(TELEMETRY_API_BASE_URL, `/api/rwa/${params.rwaId}/data`, {
+    method: "GET",
+    params: {
+      from: params.from,
+      to: params.to,
+      limit: params.limit,
+    },
+  });
+}
+
+export async function fetchRwaLatest(rwaId: number) {
+  return requestJson<RwaDataPoint>(TELEMETRY_API_BASE_URL, `/api/rwa/${rwaId}/latest`, {
+    method: "GET",
+  });
+}

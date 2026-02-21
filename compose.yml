@@ -59,6 +59,7 @@ services:
       MONAD_RPC_URL: ${MONAD_RPC_URL:-https://testnet-rpc.monad.xyz}
       SITE_ID: ${SITE_ID:-1}
       PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-5000}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
     depends_on:
       - backend
 

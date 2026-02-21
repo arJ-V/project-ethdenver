@@ -78,6 +78,10 @@ async def ingest_events(body: bytes) -> tuple[int, int]:
     pool = await get_pool()
     inserted = 0
     last_price_cents: int | None = None
+    last_oracle_rwa_id: int | None = None
+    last_oracle_kwh: int | None = None
+    last_oracle_tx_hash: str | None = None
+    last_oracle_log_index: int | None = None
     async with pool.acquire() as conn:
         for ev in events:
             rwa_id = ev.site_id
@@ -116,6 +120,10 @@ async def ingest_events(body: bytes) -> tuple[int, int]:
                     )
                     inserted += 1
                     last_price_cents = new_price_cents
+                    last_oracle_rwa_id = rwa_id
+                    last_oracle_kwh = new_kwh
+                    last_oracle_tx_hash = ev.tx_hash or None
+                    last_oracle_log_index = ev.log_index
                     payload = {
                         "site_id": rwa_id,
                         "ts": ts_dt.isoformat() if hasattr(ts_dt, "isoformat") else str(ts_dt),
@@ -170,6 +178,18 @@ async def ingest_events(body: bytes) -> tuple[int, int]:
                 "INSERT INTO oracle_pending_updates (yield_index) VALUES ($1)",
                 last_price_cents,
             )
+            if last_oracle_rwa_id is not None and last_oracle_kwh is not None:
+                await conn.execute(
+                    """
+                    INSERT INTO rwa_oracle_updates (rwa_id, price_cents, kwh, source_tx_hash, source_log_index)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    last_oracle_rwa_id,
+                    last_price_cents,
+                    last_oracle_kwh,
+                    last_oracle_tx_hash,
+                    last_oracle_log_index,
+                )
             logging.getLogger(__name__).info(
                 "oracle_pending_enqueue price_cents=%s (inserted=%s)",
                 last_price_cents,

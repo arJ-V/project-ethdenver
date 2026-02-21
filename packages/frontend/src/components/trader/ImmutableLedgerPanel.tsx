@@ -30,6 +30,7 @@ export function ImmutableLedgerPanel({ events, error }: ImmutableLedgerPanelProp
             {feed.map((event, index) => (
               <div key={`${event.optionId}-${event.txHash}-${index}`} className="ledger-inline-item">
                 <span>[{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "now"}]</span>
+                <span>{event.source === "oracle" ? "[oracle]" : "[trade]"}</span>
                 <strong>{event.type}</strong>
                 <span className={getStatusClass(event.status)}>
                   <CheckCircle2 size={10} />

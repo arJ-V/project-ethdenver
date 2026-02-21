@@ -43,3 +43,13 @@ export async function fetchTimeline(optionId: string) {
     },
   );
 }
+
+export async function fetchTradingHealth() {
+  return requestJson<{
+    service: string;
+    chainId: number | null;
+    indexer: { lastPollAt?: string; lastPollError?: string | null };
+  }>(TRADING_API_BASE_URL, "/health", {
+    method: "GET",
+  });
+}

@@ -60,10 +60,35 @@ Deployment output is written to:
 ## 6) Demo script for judges (<3 mins)
 
 1. Show real-time telemetry logs from relayer service.
-2. Show `AssetLocked` transaction and mirrored event.
-3. Submit order via `trading-api` (`POST /write-option`) and show response `txHash + optionId`.
-4. Wait for compressed expiry window.
-5. Show `GET /timeline/:optionId` with terminal lifecycle event.
+2. In Issuer Portal, click `Create RWA` once (calls `POST /api/rwa/bootstrap`).
+3. Confirm response metadata (`rwa_adi_id`, `asset_id`, `mint_tx_hash`, `lock_tx_hash`) and show `YieldMintRequested`/ySOLAR mint logs in relayer.
+4. In Trader Terminal, select the new RWA and show moving price + yield charts.
+5. Submit order via `trading-api` (`POST /write-option`) and show response `txHash + optionId`.
+6. Show hybrid immutable stream entries (oracle updates + trade lifecycle events).
+7. Wait for compressed expiry window and show `GET /timeline/:optionId` with terminal lifecycle event.
+
+## 6.1) Frontend/Backend env wiring checklist
+
+- `packages/frontend/.env`:
+  - `VITE_TELEMETRY_API_BASE_URL=http://localhost:8000`
+  - `VITE_TRADING_API_BASE_URL=http://localhost:3001`
+  - `VITE_TRADING_API_KEY=<optional if trading-api enables API key>`
+- `solartick/.env`:
+  - `ADI_RPC_URL`, `ADI_VAULT_ADDRESS`, `ADI_OPERATOR_PRIVATE_KEY`, `RWA_DEFAULT_BENEFICIARY`
+  - `MONAD_RPC_URL`, `PUBLISHER_PRIVATE_KEY`, `TELEMETRY_CONTRACT_ADDRESS`
+  - `BACKEND_URL=http://backend:8000` (publisher RWA mode)
+- `packages/relayer-python/.env`:
+  - `DATABASE_URL`, `HEDERA_RPC_URL`, `HEDERA_YSOLAR_ADDRESS`, `ORACLE_CONTRACT_ADDRESS`
+  - `ADI_RPC_URL`, `ADI_VAULT_ADDRESS`
+
+## 6.2) Quick smoke test (operator)
+
+1. `POST /api/rwa/bootstrap` with `{ "kwh": 12500 }` returns 201 and lock metadata.
+2. `GET /api/rwas` contains the created RWA with non-null `asset_id` and `bootstrap_status = locked`.
+3. Publisher emits telemetry with `site_id = rwa_adi_id`; webhook appends `rwa_timeseries`.
+4. `GET /api/rwa/{id}/data` returns multiple points over ~20-40 seconds.
+5. Trader Terminal shows chart movement and immutable stream entries tagged `[oracle]`.
+6. `POST /write-option` succeeds and immutable stream also shows `[trade]` entries.
 
 ## 7) Frontend/API integration gates
 

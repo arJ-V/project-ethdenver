@@ -13,6 +13,10 @@ QN_STREAMS_WEBHOOK_SECRET: Optional[str] = _str(os.environ.get("QN_STREAMS_WEBHO
 CORS_ORIGINS: str = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 SITE_DEFAULT: int = int(os.environ.get("SITE_DEFAULT", "1"))
 DEMO_RESET_SECRET: Optional[str] = _str(os.environ.get("DEMO_RESET_SECRET"))
+ADI_RPC_URL: Optional[str] = _str(os.environ.get("ADI_RPC_URL"))
+ADI_VAULT_ADDRESS: Optional[str] = _str(os.environ.get("ADI_VAULT_ADDRESS"))
+ADI_OPERATOR_PRIVATE_KEY: Optional[str] = _str(os.environ.get("ADI_OPERATOR_PRIVATE_KEY"))
+RWA_DEFAULT_BENEFICIARY: Optional[str] = _str(os.environ.get("RWA_DEFAULT_BENEFICIARY"))
 
 # RWA asset pricing (MVP: systematic price from yield)
 RWA_ESTABLISHMENT_RATIO: float = _float("RWA_ESTABLISHMENT_RATIO", 1.0)  # initial_price = ratio * (yield / token_amount_minted)

@@ -24,6 +24,10 @@ services:
       QN_STREAMS_WEBHOOK_SECRET: ${QN_STREAMS_WEBHOOK_SECRET:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       DEMO_RESET_SECRET: ${DEMO_RESET_SECRET:-}
+      ADI_RPC_URL: ${ADI_RPC_URL:-}
+      ADI_VAULT_ADDRESS: ${ADI_VAULT_ADDRESS:-}
+      ADI_OPERATOR_PRIVATE_KEY: ${ADI_OPERATOR_PRIVATE_KEY:-}
+      RWA_DEFAULT_BENEFICIARY: ${RWA_DEFAULT_BENEFICIARY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -53,7 +57,7 @@ services:
       MONAD_RPC_URL: ${MONAD_RPC_URL:-https://testnet-rpc.monad.xyz}
       PUBLISHER_PRIVATE_KEY: ${PUBLISHER_PRIVATE_KEY}
       TELEMETRY_CONTRACT_ADDRESS: ${TELEMETRY_CONTRACT_ADDRESS}
-      BACKEND_URL: ${BACKEND_URL:-}
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
       SITE_ID: ${SITE_ID:-1}
       PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-5000}
     depends_on:

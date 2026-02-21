@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchPriceHistory, fetchTelemetryHistory } from "../lib/telemetryApi";
+import { fetchRwaData, fetchRwaLatest } from "../lib/telemetryApi";
 
 const POLL_MS = 5000;
 const WINDOW_MS = 60 * 60 * 1000;
+const MAX_POINTS = 180;
 
 export interface DeepDivePoint {
   ts: string;
@@ -15,7 +16,11 @@ function syntheticPriceFromYield(yieldWh: number, basePrice: number) {
   return Number((basePrice * (0.94 + normalized * 0.12)).toFixed(2));
 }
 
-export function useDeepDiveSeries(assetId: string, siteId: number, fallbackBasePrice: number) {
+export function useDeepDiveSeries(
+  siteId: number,
+  fallbackBasePrice: number,
+  refreshToken = 0,
+) {
   const [series, setSeries] = useState<DeepDivePoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,51 +33,49 @@ export function useDeepDiveSeries(assetId: string, siteId: number, fallbackBaseP
       const from = new Date(to.getTime() - WINDOW_MS);
       setLoading(true);
       try {
-        const [yieldSeries, priceSeries] = await Promise.allSettled([
-          fetchTelemetryHistory({
-            siteId,
-            from: from.toISOString(),
-            to: to.toISOString(),
-            limit: 180,
-          }),
-          fetchPriceHistory({
-            assetId,
-            from: from.toISOString(),
-            to: to.toISOString(),
-            limit: 180,
-          }),
-        ]);
+        const dataPoints = await fetchRwaData({
+          rwaId: siteId,
+          from: from.toISOString(),
+          to: to.toISOString(),
+          limit: MAX_POINTS,
+        });
         if (cancelled) return;
 
-        if (yieldSeries.status !== "fulfilled") {
-          throw yieldSeries.reason;
+        let nextSeries = dataPoints.map((point) => ({
+          ts: new Date(point.ts).toISOString(),
+          price: Number((point.price_cents / 100).toFixed(2)),
+          yieldWh: point.kwh,
+        }));
+
+        if (nextSeries.length === 0) {
+          const latest = await fetchRwaLatest(siteId);
+          if (cancelled) return;
+          nextSeries = [
+            {
+              ts: new Date(latest.ts).toISOString(),
+              price: Number((latest.price_cents / 100).toFixed(2)),
+              yieldWh: latest.kwh,
+            },
+          ];
         }
 
-        const yieldPoints = yieldSeries.value;
-        const priceLookup =
-          priceSeries.status === "fulfilled"
-            ? new Map(priceSeries.value.map((point) => [new Date(point.ts).toISOString(), point.price]))
-            : new Map<string, number>();
-
-        const nextSeries = yieldPoints.map((point, index) => {
-          const key = new Date(point.ts).toISOString();
-          const price =
-            priceLookup.get(key) ??
-            (priceSeries.status === "fulfilled" && priceSeries.value[index]
-              ? priceSeries.value[index].price
-              : syntheticPriceFromYield(point.watt_hours, fallbackBasePrice));
+        // Safety fallback for bootstrapping edge cases where backend has sparse fields.
+        nextSeries = nextSeries.map((point) => {
+          const price = Number.isFinite(point.price) && point.price > 0
+            ? point.price
+            : syntheticPriceFromYield(point.yieldWh, fallbackBasePrice);
           return {
-            ts: key,
+            ts: point.ts,
             price,
-            yieldWh: point.watt_hours,
+            yieldWh: point.yieldWh,
           };
         });
 
-        setSeries(nextSeries);
+        setSeries(nextSeries.slice(-MAX_POINTS));
         setError(null);
       } catch (nextError) {
         if (cancelled) return;
-        setError(nextError instanceof Error ? nextError.message : "Failed to load telemetry");
+        setError(nextError instanceof Error ? nextError.message : "Failed to load RWA timeseries");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -84,7 +87,7 @@ export function useDeepDiveSeries(assetId: string, siteId: number, fallbackBaseP
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [assetId, siteId, fallbackBasePrice]);
+  }, [siteId, fallbackBasePrice, refreshToken]);
 
   return useMemo(() => ({ series, loading, error }), [series, loading, error]);
 }

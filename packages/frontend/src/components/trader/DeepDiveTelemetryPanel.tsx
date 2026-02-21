@@ -12,6 +12,7 @@ import {
 import type { RwaAsset } from "../../data/assets";
 import { useDeepDiveSeries } from "../../hooks/useDeepDiveSeries";
 import { Layers, Maximize2, RefreshCw, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 
 interface DeepDiveTelemetryPanelProps {
   asset: RwaAsset;
@@ -24,7 +25,8 @@ function toTimeLabel(ts: string) {
 }
 
 export function DeepDiveTelemetryPanel({ asset, onOpenTradeOptions, statusLabel }: DeepDiveTelemetryPanelProps) {
-  const { series, loading, error } = useDeepDiveSeries(asset.id, asset.telemetrySiteId, asset.price);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const { series, loading, error } = useDeepDiveSeries(asset.telemetrySiteId, asset.price, refreshToken);
   const chartData = series.map((point) => ({
     ...point,
     timeLabel: toTimeLabel(point.ts),
@@ -52,21 +54,16 @@ export function DeepDiveTelemetryPanel({ asset, onOpenTradeOptions, statusLabel 
         </div>
       </div>
 
-      {error ? <p className="status status-error">Telemetry endpoint unavailable (expected during setup).</p> : null}
+      {error ? <p className="status status-error">RWA data unavailable for this asset yet.</p> : null}
       {loading && chartData.length === 0 ? <p className="muted">Loading telemetry streams…</p> : null}
 
       <div className="deepdive-toolbar">
-        <div className="deepdive-range-tabs">
-          <button type="button">1m</button>
-          <button type="button">5m</button>
-          <button type="button" className="active">1h</button>
-          <button type="button">1d</button>
-        </div>
+        <div className="deepdive-range-tabs" />
         <div className="deepdive-actions">
           <button type="button" className="trade-open-button" onClick={onOpenTradeOptions}>
             Trade Options
           </button>
-          <button type="button" aria-label="Refresh">
+          <button type="button" aria-label="Refresh" onClick={() => setRefreshToken((prev) => prev + 1)}>
             <RefreshCw size={14} />
           </button>
           <button type="button" aria-label="Expand">

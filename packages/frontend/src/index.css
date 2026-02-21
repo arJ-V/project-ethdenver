@@ -840,13 +840,166 @@ body {
 
 .issuer-top-grid {
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
 .issuer-grid {
   display: grid;
   gap: 0.65rem;
+}
+
+.issuer-middle-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.9fr 1.2fr;
+  gap: 0.65rem;
+}
+
+.issuer-kv-list,
+.issuer-health-list,
+.issuer-attention-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.issuer-kv-list p,
+.issuer-health-list p,
+.issuer-attention-item p {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.issuer-kv-list strong,
+.issuer-health-list strong {
+  color: var(--text-primary);
+  margin-left: 0.35rem;
+}
+
+.issuer-health-list p {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.health-dot-up {
+  background: var(--status-positive);
+}
+
+.health-dot-down {
+  background: var(--status-negative);
+}
+
+.issuer-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.issuer-metrics-grid div {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 0.48rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.issuer-metrics-grid span {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.issuer-metrics-grid strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+}
+
+.issuer-rwa-form {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.issuer-rwa-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.issuer-rwa-form input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  padding: 0.42rem 0.48rem;
+  font-size: 0.82rem;
+}
+
+.issuer-rwa-form button {
+  border: 1px solid rgba(173, 216, 230, 0.42);
+  border-radius: 3px;
+  background: rgba(173, 216, 230, 0.2);
+  color: #111a20;
+  font-weight: 700;
+  font-size: 0.74rem;
+  padding: 0.45rem 0.58rem;
+}
+
+.issuer-attention-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.48rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.issuer-attention-item button {
+  align-self: flex-start;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  padding: 0.26rem 0.45rem;
+}
+
+.issuer-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+
+.issuer-filter-chip {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.24rem 0.42rem;
+}
+
+.issuer-filter-chip-active {
+  border-color: rgba(173, 216, 230, 0.4);
+  color: var(--text-primary);
+  background: rgba(173, 216, 230, 0.16);
 }
 
 .hsm-panel {
@@ -1059,6 +1212,14 @@ body {
     grid-column: 1 / -1;
     grid-template-columns: 1fr 1fr 1fr;
     grid-template-rows: none;
+  }
+
+  .issuer-top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .issuer-middle-grid {
+    grid-template-columns: 1fr;
   }
 }
 

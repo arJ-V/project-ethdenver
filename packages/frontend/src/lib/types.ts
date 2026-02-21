@@ -51,6 +51,7 @@ export interface TimelineEvent {
   optionId?: string;
   type: string;
   label?: string;
+  source?: "trade" | "oracle";
   status?: StatusLabel;
   chain?: string;
   txHash?: string;

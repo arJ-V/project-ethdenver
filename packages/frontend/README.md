@@ -18,10 +18,10 @@ npm run dev
 
 ## Environment
 
-- `VITE_API_BASE_URL`: single base URL for hackathon deployments.
-- Optional overrides:
-  - `VITE_TELEMETRY_API_BASE_URL`
-  - `VITE_TRADING_API_BASE_URL`
+- `VITE_TELEMETRY_API_BASE_URL`: telemetry/RWA backend (default `http://localhost:8000`)
+- `VITE_TRADING_API_BASE_URL`: trading-api backend (default `http://localhost:3001`)
+- Optional single-origin proxy:
+  - `VITE_API_BASE_URL` (used when both are served behind one host)
 - Optional write auth:
   - `VITE_TRADING_API_KEY`
 
