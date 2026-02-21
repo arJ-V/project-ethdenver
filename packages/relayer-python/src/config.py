@@ -21,6 +21,7 @@ class Config:
     oracle_admin_private_key: str
     oracle_push_threshold_seconds: int
     local_state_file: str
+    database_url: str
 
 
 def load_config() -> Config:
@@ -41,4 +42,5 @@ def load_config() -> Config:
         oracle_admin_private_key=os.getenv("ORACLE_ADMIN_PRIVATE_KEY", ""),
         oracle_push_threshold_seconds=int(os.getenv("ORACLE_PUSH_THRESHOLD_SECONDS", "240")),
         local_state_file=os.getenv("LOCAL_STATE_FILE", ".relayer_state.json"),
+        database_url=os.getenv("DATABASE_URL", ""),
     )

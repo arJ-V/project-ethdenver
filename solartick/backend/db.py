@@ -38,6 +38,17 @@ async def init_db(pool: asyncpg.Pool) -> None:
         CREATE INDEX IF NOT EXISTS idx_telemetry_site_ts
         ON telemetry_points (site_id, ts DESC);
     """)
+    await pool.execute("""
+        CREATE TABLE IF NOT EXISTS oracle_pending_updates (
+            id BIGSERIAL PRIMARY KEY,
+            yield_index BIGINT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    """)
+    await pool.execute("""
+        CREATE INDEX IF NOT EXISTS idx_oracle_pending_created
+        ON oracle_pending_updates (created_at);
+    """)
 
 
 @asynccontextmanager

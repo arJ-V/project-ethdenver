@@ -1,0 +1,79 @@
+# Full stack: solartick (db, backend, web, publisher) + relayer.
+# From repo root: docker compose up --build
+# Solartick-only (no relayer): cd solartick && docker compose up
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: solartick
+    volumes:
+      - solartick_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./solartick/backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./solartick/.env
+    environment:
+      # Override so backend reaches Postgres via Docker network hostname
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/solartick
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      DEMO_RESET_SECRET: ${DEMO_RESET_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health'); exit(0 if r.getcode()==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./solartick/web
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+  publisher:
+    build:
+      context: ./solartick/publisher
+      dockerfile: Dockerfile
+    env_file:
+      - ./solartick/.env
+    environment:
+      MONAD_RPC_URL: ${MONAD_RPC_URL:-https://testnet-rpc.monad.xyz}
+      SITE_ID: ${SITE_ID:-1}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-5000}
+    depends_on:
+      - backend
+
+  relayer:
+    build:
+      context: ./packages/relayer-python
+      dockerfile: Dockerfile
+    env_file:
+      - ./packages/relayer-python/.env
+    environment:
+      # Override so relayer reaches Postgres via Docker network hostname (env_file provides Hedera/ADI vars)
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/solartick
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  solartick_pgdata:

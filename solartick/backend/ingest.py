@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, List
 
@@ -100,4 +101,21 @@ async def ingest_events(body: bytes) -> tuple[int, int]:
                 PUBSUB_NOTIFY(ev.site_id, payload)
         except Exception:
             pass
+
+    # Enqueue one yield index for the relayer to push to Hedera oracle (when we inserted at least one event).
+    # Formula: deterministic index from last event in batch, clamped to 100-999 (contract rejects 0).
+    if inserted > 0 and events:
+        last_ev = events[-1]
+        yield_index = max(100, min(999, (last_ev.watt_hours % 1000) + 100))
+        await pool.execute(
+            "INSERT INTO oracle_pending_updates (yield_index) VALUES ($1)",
+            yield_index,
+        )
+        logging.getLogger(__name__).info(
+            "oracle_pending_enqueue yield_index=%s (from watt_hours=%s, inserted=%s)",
+            yield_index,
+            last_ev.watt_hours,
+            inserted,
+        )
+
     return inserted, len(events)
