@@ -6,6 +6,7 @@ from typing import Dict, Set, Tuple
 
 import psycopg2
 from web3 import Web3
+from web3.exceptions import TimeExhausted
 
 from .config import load_config
 
@@ -74,7 +75,13 @@ def _build_and_send_tx(
     )
     signed = account.sign_transaction(tx)
     tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    try:
+        receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
+    except TimeExhausted:
+        raise RuntimeError(
+            f"Transaction not in chain after 300s tx={tx_hash.hex()} "
+            "(network delay or dropped; check block explorer)"
+        ) from None
     if receipt.status != 1:
         revert_msg = _get_revert_reason(web3, tx_builder, account.address, gas_limit)
         raise RuntimeError(
