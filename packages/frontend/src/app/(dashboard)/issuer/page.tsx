@@ -27,6 +27,7 @@ function shortHash(hash: string) {
 
 export default function IssuerPortal() {
   const [kwhInput, setKwhInput] = useState("")
+  const [hsmPublicAddress, setHsmPublicAddress] = useState("")
   const [createLoading, setCreateLoading] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createdId, setCreatedId] = useState<number | null>(null)
@@ -258,6 +259,17 @@ export default function IssuerPortal() {
                     placeholder="e.g. 1000"
                     value={kwhInput}
                     onChange={(e) => setKwhInput(e.target.value)}
+                    disabled={createLoading || rwaCreationInProgress}
+                    className="font-mono"
+                  />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-widest">HSM Public Address</label>
+                  <Input
+                    type="text"
+                    placeholder="To verify yield data"
+                    value={hsmPublicAddress}
+                    onChange={(e) => setHsmPublicAddress(e.target.value)}
                     disabled={createLoading || rwaCreationInProgress}
                     className="font-mono"
                   />
