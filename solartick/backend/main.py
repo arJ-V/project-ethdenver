@@ -1,4 +1,12 @@
 import logging
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from repo root (solartick/.env) when running from solartick/backend
+_env_dir = Path(__file__).resolve().parent.parent
+load_dotenv(_env_dir / ".env")
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response, status

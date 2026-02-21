@@ -6,7 +6,7 @@ Systematic RWA asset pricing for MVP. All prices are in integer cents.
 """
 import logging
 import random
-from typing import Any
+from typing import Any, Dict, Optional
 
 import asyncpg
 
@@ -31,14 +31,14 @@ async def get_or_update_site_price_cents(
     conn: asyncpg.Connection,
     site_id: int,
     new_yield: int,
-    token_amount_minted: int | None = None,
+    token_amount_minted: Optional[int] = None,
 ) -> int:
     """
     Establish RWA price for a site on first yield, or update from yield delta thereafter.
     Returns the asset price in cents to store for this telemetry point.
     """
     token = token_amount_minted if token_amount_minted is not None else RWA_TOKEN_AMOUNT_MINTED
-    row: dict[str, Any] | None = await conn.fetchrow(
+    row: Optional[Dict[str, Any]] = await conn.fetchrow(
         "SELECT initial_yield, previous_yield, current_price_cents FROM rwa_site_state WHERE site_id = $1",
         site_id,
     )

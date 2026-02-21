@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 import asyncpg
 from db import get_pool
@@ -17,7 +17,7 @@ def set_pubsub_notify(fn: Callable[[int, dict], None]) -> None:
     PUBSUB_NOTIFY = fn
 
 
-def _parse_event(raw: Any) -> StreamsEvent | None:
+def _parse_event(raw: Any) -> Optional[StreamsEvent]:
     try:
         if isinstance(raw, dict):
             o = raw
@@ -77,11 +77,11 @@ async def ingest_events(body: bytes) -> tuple[int, int]:
 
     pool = await get_pool()
     inserted = 0
-    last_price_cents: int | None = None
-    last_oracle_rwa_id: int | None = None
-    last_oracle_kwh: int | None = None
-    last_oracle_tx_hash: str | None = None
-    last_oracle_log_index: int | None = None
+    last_price_cents: Optional[int] = None
+    last_oracle_rwa_id: Optional[int] = None
+    last_oracle_kwh: Optional[int] = None
+    last_oracle_tx_hash: Optional[str] = None
+    last_oracle_log_index: Optional[int] = None
     async with pool.acquire() as conn:
         for ev in events:
             rwa_id = ev.site_id

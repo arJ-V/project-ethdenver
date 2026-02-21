@@ -1,12 +1,13 @@
 
 "use client"
 
+import { useState, useEffect } from "react"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Search, TrendingUp, TrendingDown, Activity } from "lucide-react"
+import { Search, TrendingUp, TrendingDown, Activity, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { listRwas, getPrice, checkBackendHealth, type RwaListItem } from "@/lib/solartick-api"
 
 export type Asset = {
   id: string
@@ -16,17 +17,35 @@ export type Asset = {
   change: number
   volume: string
   category: "DeFi" | "Real Estate" | "Energy" | "Tech"
+  isRwa?: boolean
 }
 
-const MOCK_ASSETS: Asset[] = [
-  { id: "1", symbol: "CTX", name: "Conduit Index", price: "2,450.21", change: 2.4, volume: "1.2B", category: "DeFi" },
-  { id: "2", symbol: "SOLA", name: "Solaris Yield", price: "84.50", change: -1.2, volume: "450M", category: "Energy" },
-  { id: "3", symbol: "REIT", name: "Urban Prime", price: "1,120.00", change: 0.5, volume: "89M", category: "Real Estate" },
-  { id: "4", symbol: "NEO", name: "Neo Genesis", price: "45.12", change: 5.8, volume: "2.1B", category: "Tech" },
-  { id: "5", symbol: "LQD", name: "Liquid Flow", price: "12.05", change: -0.8, volume: "300M", category: "DeFi" },
-  { id: "6", symbol: "WND", name: "Wind Harvest", price: "67.90", change: 1.1, volume: "120M", category: "Energy" },
-  { id: "7", symbol: "META", name: "Meta Grid", price: "234.55", change: 3.2, volume: "560M", category: "Tech" },
-]
+async function fetchRwaAssets(): Promise<Asset[]> {
+  const rwas = await listRwas()
+  const withPrices = await Promise.all(
+    rwas.map(async (r: RwaListItem) => {
+      let priceStr = "—"
+      try {
+        const p = await getPrice(r.rwa_adi_id)
+        if (p.asset_price_cents != null)
+          priceStr = (p.asset_price_cents / 100).toFixed(2)
+      } catch {
+        if (r.latest_kwh != null) priceStr = `${(r.latest_kwh / 1000).toFixed(1)} KWH`
+      }
+      return {
+        id: String(r.rwa_adi_id),
+        symbol: `RWA-${r.rwa_adi_id}`,
+        name: `RWA Asset ${r.rwa_adi_id}`,
+        price: priceStr,
+        change: 0,
+        volume: "—",
+        category: "Energy" as const,
+        isRwa: true,
+      }
+    })
+  )
+  return withPrices
+}
 
 interface AssetDiscoveryProps {
   selectedId: string
@@ -34,12 +53,57 @@ interface AssetDiscoveryProps {
 }
 
 export function AssetDiscovery({ selectedId, onSelect }: AssetDiscoveryProps) {
+  const [rwaAssets, setRwaAssets] = useState<Asset[]>([])
+  const [loading, setLoading] = useState(true)
+  const [dataSource, setDataSource] = useState<"live" | "offline" | "checking">("checking")
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([checkBackendHealth(), fetchRwaAssets()])
+      .then(([health, list]) => {
+        if (cancelled) return
+        setRwaAssets(health.ok ? list : [])
+        setDataSource(health.ok ? "live" : "offline")
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRwaAssets([])
+          setDataSource("offline")
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // When live data loads and current selection isn't in the list, select first RWA
+  useEffect(() => {
+    if (rwaAssets.length > 0 && (selectedId === "" || !rwaAssets.some((a) => a.id === selectedId))) {
+      onSelect(rwaAssets[0])
+    }
+  }, [rwaAssets, selectedId, onSelect])
+
   return (
     <Card className="h-full border-none rounded-none bg-sidebar/50 backdrop-blur-sm">
       <CardHeader className="p-4 space-y-4">
         <div className="flex items-center justify-between">
           <CardTitle className="text-xl font-headline tracking-tight">Asset Discovery</CardTitle>
-          <Activity className="w-5 h-5 text-primary animate-pulse" />
+          <div className="flex items-center gap-2">
+            {dataSource === "live" && (
+              <span className="text-[10px] font-medium text-accent uppercase tracking-wider" title="Data from Postgres (SolarTick backend)">
+                Live DB
+              </span>
+            )}
+            {dataSource === "offline" && (
+              <span className="text-[10px] font-medium text-destructive uppercase tracking-wider" title="Backend unreachable">
+                Offline
+              </span>
+            )}
+            {loading ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Activity className="w-5 h-5 text-primary animate-pulse" />}
+          </div>
         </div>
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -52,14 +116,24 @@ export function AssetDiscovery({ selectedId, onSelect }: AssetDiscoveryProps) {
       <CardContent className="p-0">
         <ScrollArea className="h-[calc(100vh-280px)]">
           <div className="px-2 pb-4 space-y-1">
-            {MOCK_ASSETS.map((asset) => (
+            {dataSource === "offline" && !loading && (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Backend unreachable. Start SolarTick (Postgres + backend) and set <code className="text-xs">NEXT_PUBLIC_SOLARTICK_API_URL=http://localhost:8000</code>.
+              </div>
+            )}
+            {dataSource === "live" && rwaAssets.length === 0 && !loading && (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No RWAs in database. Create one: <code className="text-xs">POST /api/rwa</code> with <code className="text-xs">{"{ \"kwh\": 50000 }"}</code>
+              </div>
+            )}
+            {rwaAssets.map((asset) => (
               <button
                 key={asset.id}
                 onClick={() => onSelect(asset)}
                 className={cn(
                   "w-full flex items-center justify-between p-3 rounded-md transition-all text-left group",
-                  selectedId === asset.id 
-                    ? "bg-primary/10 border-l-2 border-primary shadow-inner" 
+                  selectedId === asset.id
+                    ? "bg-primary/10 border-l-2 border-primary shadow-inner"
                     : "hover:bg-muted/30"
                 )}
               >
@@ -68,7 +142,9 @@ export function AssetDiscovery({ selectedId, onSelect }: AssetDiscoveryProps) {
                   <span className="text-xs text-muted-foreground">{asset.name}</span>
                 </div>
                 <div className="text-right flex flex-col items-end">
-                  <span className="font-headline text-sm tabular-nums">${asset.price}</span>
+                  <span className="font-headline text-sm tabular-nums">
+                    {asset.price.includes("KWH") || asset.price === "—" ? asset.price : `$${asset.price}`}
+                  </span>
                   <div className={cn(
                     "flex items-center text-[10px] font-medium",
                     asset.change >= 0 ? "text-accent" : "text-destructive"

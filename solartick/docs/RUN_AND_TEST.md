@@ -22,7 +22,20 @@ The backend runs `init_db` on startup, so tables (`telemetry_points`, `rwas`, `r
 
 ---
 
-## 2. Check DB and backend
+## 2. Using a remote database
+
+If Postgres is at a remote host (e.g. `16.58.44.187:5432`), set `DATABASE_URL` when running the backend:
+
+```bash
+export DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@16.58.44.187:5432/solartick
+# Then start the backend (e.g. docker compose up backend -d, or run backend outside compose without the db service)
+```
+
+The backend reads `DATABASE_URL` from the environment; no code change is required. Ensure the DB has the schema (run the backend once so it runs `init_db`).
+
+---
+
+## 3. Check DB and backend
 
 ```bash
 # Health (DB connectivity)
@@ -34,7 +47,7 @@ docker compose exec db psql -U postgres -d solartick -c "\dt"
 
 ---
 
-## 3. Test RWA API (no chain)
+## 4. Test RWA API (no chain)
 
 **Create an RWA** (starting KWH → get RWA ADI ID):
 
@@ -66,7 +79,7 @@ curl -s http://localhost:8000/api/rwas | jq
 
 ---
 
-## 4. Test legacy endpoints (optional)
+## 5. Test legacy endpoints (optional)
 
 ```bash
 # History (site_id=1, legacy telemetry)
@@ -78,7 +91,28 @@ curl -s "http://localhost:8000/api/price?site_id=1" | jq
 
 ---
 
-## 5. Demo reset (clear tables)
+## 6. Test Postgres + Frontend (Trader Terminal) only
+
+To run **only** the database and SolarTick backend, then the Next.js frontend (no AI copilot, no trading-api):
+
+From repo root:
+
+```bash
+./scripts/run-postgres-and-frontend.sh
+```
+
+This starts `db` and `backend` with Docker, waits for health, creates one RWA, then prints:
+
+```text
+cd packages/frontend
+NEXT_PUBLIC_SOLARTICK_API_URL=http://localhost:8000 npm run dev
+```
+
+Open **http://localhost:3000/terminal**. You should see the RWA in Asset Discovery, the pricing chart when you select it, and the Immutable Stream fed from `GET /api/rwa/feed`.
+
+---
+
+## 7. Demo reset (clear tables)
 
 When `DEMO_RESET_SECRET` is set in `.env`:
 
@@ -90,7 +124,7 @@ This truncates: `telemetry_points`, `rwa_site_state`, `rwa_timeseries`, `rwas`.
 
 ---
 
-## 6. Run DB only (for local backend/dev)
+## 8. Run DB only (for local backend/dev)
 
 To run **only Postgres** and point a local backend at it:
 
@@ -128,7 +162,7 @@ Use `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/solartick` so th
 
 ---
 
-## 7. Full wipe and restart
+## 9. Full wipe and restart
 
 ```bash
 docker compose down -v

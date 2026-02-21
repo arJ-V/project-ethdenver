@@ -6,32 +6,24 @@ import { AssetDiscovery, Asset } from "@/components/terminal/AssetDiscovery"
 import { DeepDive } from "@/components/terminal/DeepDive"
 import { AICopilot } from "@/components/terminal/AICopilot"
 import { ImmutableLedger } from "@/components/terminal/ImmutableLedger"
-
-const DEFAULT_ASSET: Asset = {
-  id: "1",
-  symbol: "CTX",
-  name: "Conduit Index",
-  price: "2,450.21",
-  change: 2.4,
-  volume: "1.2B",
-  category: "DeFi"
-}
+import { TerminalErrorBoundary } from "@/components/terminal/TerminalErrorBoundary"
 
 export default function TerminalPage() {
-  const [selectedAsset, setSelectedAsset] = useState<Asset>(DEFAULT_ASSET)
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
 
   return (
-    <div className="flex flex-col h-screen">
+    <TerminalErrorBoundary>
+    <div className="flex flex-col h-screen min-h-0 bg-background">
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Panel: Asset Discovery */}
+        {/* Left Panel: Asset Discovery (live DB only) */}
         <div className="w-80 border-r border-muted/10 overflow-hidden shrink-0">
-          <AssetDiscovery 
-            selectedId={selectedAsset.id} 
-            onSelect={setSelectedAsset} 
+          <AssetDiscovery
+            selectedId={selectedAsset?.id ?? ""}
+            onSelect={setSelectedAsset}
           />
         </div>
 
-        {/* Center Panel: Deep Dive & Telemetry */}
+        {/* Center Panel: Deep Dive (RWA time-series from Postgres) */}
         <div className="flex-1 overflow-auto bg-background/50">
           <DeepDive asset={selectedAsset} />
         </div>
@@ -47,5 +39,6 @@ export default function TerminalPage() {
         <ImmutableLedger />
       </div>
     </div>
+    </TerminalErrorBoundary>
   )
 }

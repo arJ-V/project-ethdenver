@@ -59,10 +59,10 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-If port 8000 is already used by SolarTick backend, use another port (e.g. 8001) and set `PORT=8001` in ai-copilot `.env`. Then point the frontend at the copilot port.
+If port 8000 is already used by SolarTick backend, use another port (e.g. 8003) and set `PORT=8003` in ai-copilot `.env`. Then point the frontend at the copilot port.
 
 - Copilot: http://localhost:8000 (or your PORT)
-- In `.env`: `SOLARTICK_API_BASE_URL=http://localhost:8000` — if SolarTick backend is on 8000, use that; if copilot is on 8001, SolarTick can stay on 8000.
+- In `.env`: `SOLARTICK_API_BASE_URL=http://localhost:8000` — if SolarTick backend is on 8000, use that; if copilot is on 8003, SolarTick can stay on 8000.
 - Set `HEDERA_API_BASE_URL=http://localhost:3001` and `HEDERA_MOCK=false` so submit calls the trading-api.
 
 ## 5. (Optional) SolarTick publisher
@@ -85,16 +85,41 @@ At submit time the ai-copilot uses the **current asset price in cents** from Sol
 3. **Intent**: Agent returns a JSON intent; save it via `POST /intents` (or whatever the UI does).
 4. **Submit**: Call `POST /intents/{intent_id}/submit`. Copilot fetches current asset price from SolarTick, then calls trading-api `POST /write-option` with that strike (in cents), so `writeOption(buyer, amount, strike, expiry)` on Hedera uses the real asset price.
 
+## 6. Frontend (Trader Terminal)
+
+The Next.js app in `packages/frontend` talks to both the SolarTick backend (RWA data, pricing graph, oracle feed) and the AI copilot (chat, intents).
+
+```bash
+cd packages/frontend
+cp .env.example .env   # then edit if needed
+npm install
+npm run dev
+```
+
+- App: http://localhost:3000 — open **Terminal** for the trading UI.
+
+**Env (optional):** In `packages/frontend/.env`:
+
+- `NEXT_PUBLIC_SOLARTICK_API_URL` — SolarTick backend (e.g. `http://localhost:8000`). If unset, same-origin is used.
+- `NEXT_PUBLIC_COPILOT_API_URL` — AI copilot (e.g. `http://localhost:8003`). If unset, same-origin is used.
+
+**UI behavior:**
+
+- **Asset Discovery** lists RWAs from `GET /api/rwas` (and current price). If none, shows mock assets.
+- **Deep Dive** chart uses `GET /api/rwa/{id}/data` and `/api/rwa/{id}/latest` for price time-series when the selected asset is an RWA.
+- **AI Copilot** has **Ask / Analyze** vs **Trading Agent** toggle; chat uses `POST /chat` with `mode`. The panel shows **Live** or **Offline** depending on `NEXT_PUBLIC_COPILOT_API_URL` and copilot health. Trade intents can be submitted via **Save & Submit to Hedera** (calls copilot `POST /intents` then `POST /intents/{id}/submit`). Start the copilot on port 8003 when SolarTick is on 8000.
+- **Immutable Stream** (bottom bar) uses `GET /api/rwa/feed` for oracle updates when the SolarTick backend is configured.
+
 ## Port summary
 
 | Service       | Port | Purpose                    |
 |---------------|------|----------------------------|
 | SolarTick backend | 8000 | Telemetry, RWA API, price (Postgres) |
-| AI copilot    | 8000 or 8001 | Chat, intents, submit      |
+| AI copilot    | 8000 or 8003 | Chat, intents, submit      |
 | Trading-api   | 3001 | writeOption to Hedera      |
 | Relayer       | —    | Process only (Postgres → Oracle)     |
 
-If both SolarTick and ai-copilot use 8000, run one on 8000 and the other on 8001, and set `SOLARTICK_API_BASE_URL` in the copilot to the SolarTick backend URL.
+If both SolarTick and ai-copilot use 8000, run one on 8000 and the other on 8003, and set `SOLARTICK_API_BASE_URL` in the copilot to the SolarTick backend URL.
 
 ## Troubleshooting
 
